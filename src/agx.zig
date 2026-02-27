@@ -12,6 +12,7 @@ pub const store = @import("storage/store.zig");
 pub const git = @import("git/cli.zig");
 pub const compare_metrics = @import("compare/metrics.zig");
 pub const compare_renderer = @import("compare/renderer.zig");
+pub const context_export = @import("storage/export.zig");
 pub const ingest = @import("daemon/ingest.zig");
 pub const file_watcher = @import("daemon/file_watcher.zig");
 

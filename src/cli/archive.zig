@@ -108,57 +108,18 @@ fn archiveOne(
 ) !void {
     _ = stderr;
 
-    // Export context to .agx/context/{task_id}/
-    const task_id_str = task.id.encode();
-    const context_dir = try std.fmt.allocPrint(alloc, ".agx/context/{s}", .{&task_id_str});
-    defer alloc.free(context_dir);
-    std.fs.cwd().makePath(context_dir) catch {};
-
-    // Write summary for this exploration
-    const summary_path = try std.fmt.allocPrint(alloc, "{s}/exploration_{d}.md", .{ context_dir, exp.index });
-    defer alloc.free(summary_path);
-
-    const summary_file = std.fs.cwd().createFile(summary_path, .{}) catch |err| {
-        try stdout.print("warning: could not write context for [{d}]: {s}\n", .{ exp.index, @errorName(err) });
+    // Export context using the export module
+    const context_dir = agx.context_export.exportExplorationContext(
+        alloc,
+        store,
+        task,
+        exp,
+        ".agx/context",
+    ) catch |err| {
+        try stdout.print("warning: could not export context for [{d}]: {s}\n", .{ exp.index, @errorName(err) });
         return;
     };
-    defer summary_file.close();
-
-    var file_buf: [2048]u8 = undefined;
-    var fw = summary_file.writer(&file_buf);
-    const w = &fw.interface;
-
-    try w.print("# Exploration [{d}]\n\n", .{exp.index});
-    try w.print("- Status: {s}\n", .{exp.status.toStr()});
-    try w.print("- Branch: {s}\n", .{exp.branch_name});
-    if (exp.approach) |approach| {
-        try w.print("- Approach: {s}\n", .{approach});
-    }
-    if (exp.summary) |summary| {
-        try w.print("- Summary: {s}\n", .{summary});
-    }
-
-    // Write evidence summary
-    var ev_buf: [64]agx.Evidence = undefined;
-    const evidence = store.getEvidenceByExploration(exp.id, &ev_buf) catch &[_]agx.Evidence{};
-    defer for (evidence) |ev| {
-        if (ev.hash) |h| alloc.free(h);
-        if (ev.summary) |s| alloc.free(s);
-        if (ev.raw_path) |p| alloc.free(p);
-    };
-
-    if (evidence.len > 0) {
-        try w.print("\n## Evidence\n\n", .{});
-        for (evidence) |ev| {
-            try w.print("- [{s}] {s}", .{ ev.status.toStr(), ev.kind.toStr() });
-            if (ev.summary) |s| {
-                try w.print(": {s}", .{s});
-            }
-            try w.print("\n", .{});
-        }
-    }
-
-    try w.flush();
+    defer alloc.free(context_dir);
 
     // Remove worktree but keep branch (as orphan ref for future reference)
     git.removeWorktree(exp.worktree_path) catch {};
@@ -166,5 +127,5 @@ fn archiveOne(
     // Update status
     try store.updateExplorationStatus(exp.id, .archived, null);
 
-    try stdout.print("Archived [{d}] — context saved to {s}\n", .{ exp.index, summary_path });
+    try stdout.print("Archived [{d}] — context saved to {s}\n", .{ exp.index, context_dir });
 }
