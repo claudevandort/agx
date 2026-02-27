@@ -35,6 +35,16 @@ pub fn build(b: *std.Build) void {
     sqlite_mod.addIncludePath(b.path("deps/sqlite"));
     sqlite_mod.linkLibrary(sqlite_lib);
 
+    // --- agx library module (core + storage) ---
+    const agx_mod = b.addModule("agx", .{
+        .root_source_file = b.path("src/agx.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "sqlite", .module = sqlite_mod },
+        },
+    });
+
     // --- Main executable ---
     const exe = b.addExecutable(.{
         .name = "agx",
@@ -44,6 +54,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .imports = &.{
                 .{ .name = "sqlite", .module = sqlite_mod },
+                .{ .name = "agx", .module = agx_mod },
             },
         }),
     });
@@ -59,19 +70,28 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
 
-    // --- Tests ---
-    const test_mod = b.createModule(.{
+    // --- Tests (all via agx root module) ---
+    const test_step = b.step("test", "Run unit tests");
+
+    const agx_test_mod = b.createModule(.{
+        .root_source_file = b.path("src/agx.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "sqlite", .module = sqlite_mod },
+        },
+    });
+    const agx_tests = b.addTest(.{ .root_module = agx_test_mod });
+    test_step.dependOn(&b.addRunArtifact(agx_tests).step);
+
+    // Also test sqlite.zig directly
+    const sqlite_test_mod = b.createModule(.{
         .root_source_file = b.path("src/sqlite.zig"),
         .target = target,
         .optimize = optimize,
     });
-    test_mod.addIncludePath(b.path("deps/sqlite"));
-    test_mod.linkLibrary(sqlite_lib);
-
-    const unit_tests = b.addTest(.{
-        .root_module = test_mod,
-    });
-    const run_unit_tests = b.addRunArtifact(unit_tests);
-    const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&run_unit_tests.step);
+    sqlite_test_mod.addIncludePath(b.path("deps/sqlite"));
+    sqlite_test_mod.linkLibrary(sqlite_lib);
+    const sqlite_tests = b.addTest(.{ .root_module = sqlite_test_mod });
+    test_step.dependOn(&b.addRunArtifact(sqlite_tests).step);
 }
