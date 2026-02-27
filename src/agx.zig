@@ -9,6 +9,7 @@ pub const evidence = @import("core/evidence.zig");
 pub const snapshot = @import("core/snapshot.zig");
 pub const migrations = @import("storage/migrations.zig");
 pub const store = @import("storage/store.zig");
+pub const git = @import("git/cli.zig");
 
 // Re-export key types for convenience
 pub const Ulid = ulid.Ulid;
@@ -19,6 +20,7 @@ pub const Event = event.Event;
 pub const Evidence = evidence.Evidence;
 pub const Snapshot = snapshot.Snapshot;
 pub const Store = store.Store;
+pub const GitCli = git.GitCli;
 
 test {
     // Pull in all tests from submodules
