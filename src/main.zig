@@ -5,6 +5,8 @@ const init_cmd = @import("cli/init.zig");
 const spawn_cmd = @import("cli/spawn.zig");
 const status_cmd = @import("cli/status.zig");
 const done_cmd = @import("cli/done.zig");
+const approach_cmd = @import("cli/approach.zig");
+const evidence_cmd = @import("cli/evidence.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -55,6 +57,18 @@ pub fn main() !void {
             try stderr.flush();
             std.process.exit(1);
         };
+    } else if (std.mem.eql(u8, command, "approach")) {
+        approach_cmd.run(alloc, cmd_args, stdout, stderr) catch |err| {
+            try stderr.print("agx approach: {s}\n", .{@errorName(err)});
+            try stderr.flush();
+            std.process.exit(1);
+        };
+    } else if (std.mem.eql(u8, command, "evidence")) {
+        evidence_cmd.run(alloc, cmd_args, stdout, stderr) catch |err| {
+            try stderr.print("agx evidence: {s}\n", .{@errorName(err)});
+            try stderr.flush();
+            std.process.exit(1);
+        };
     } else if (std.mem.eql(u8, command, "version")) {
         try stdout.print("agx v0.1.0\n", .{});
     } else if (std.mem.eql(u8, command, "help") or std.mem.eql(u8, command, "--help") or std.mem.eql(u8, command, "-h")) {
@@ -79,6 +93,8 @@ fn printUsage(writer: *std.Io.Writer) !void {
         \\  spawn      Spawn parallel explorations for a task
         \\  status     Show active tasks and explorations
         \\  done       Mark current exploration as complete
+        \\  approach   Set the approach description for current exploration
+        \\  evidence   Record evidence (test results, builds, etc.)
         \\  compare    Compare explorations side by side
         \\  keep       Merge an exploration into the base branch
         \\  archive    Archive an exploration (preserve context)
