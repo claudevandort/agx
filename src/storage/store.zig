@@ -320,6 +320,42 @@ pub const Store = struct {
         return stmt.columnInt64(0);
     }
 
+    pub fn getEventsBySession(self: *Store, session_id: Ulid, kind_filter: ?[]const u8, buf: []Event) StoreError![]Event {
+        var stmt = if (kind_filter) |_|
+            try self.db.prepare(
+                "SELECT id, session_id, kind, data, created_at FROM events WHERE session_id = ?1 AND kind = ?2 ORDER BY created_at LIMIT ?3",
+            )
+        else
+            try self.db.prepare(
+                "SELECT id, session_id, kind, data, created_at FROM events WHERE session_id = ?1 ORDER BY created_at LIMIT ?2",
+            );
+        defer stmt.finalize();
+
+        try stmt.bindBlob(1, &session_id.bytes);
+        if (kind_filter) |kf| {
+            try stmt.bindText(2, kf);
+            try stmt.bindInt(3, @intCast(buf.len));
+        } else {
+            try stmt.bindInt(2, @intCast(buf.len));
+        }
+
+        var count: usize = 0;
+        while (count < buf.len) {
+            const result = try stmt.step();
+            if (result != .row) break;
+            buf[count] = .{
+                .id = readUlid(&stmt, 0),
+                .session_id = readUlid(&stmt, 1),
+                .kind = EventKind.fromStr(stmt.columnText(2) orelse "custom") catch .custom,
+                .data = try self.dupeOptionalText(stmt.columnText(3)),
+                .created_at = stmt.columnInt64(4),
+            };
+            count += 1;
+        }
+
+        return buf[0..count];
+    }
+
     pub fn countErrorsByExploration(self: *Store, exploration_id: Ulid) StoreError!i64 {
         var stmt = try self.db.prepare(
             "SELECT COUNT(*) FROM events e JOIN sessions s ON e.session_id = s.id WHERE s.exploration_id = ?1 AND e.kind = 'error'",

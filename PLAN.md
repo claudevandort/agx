@@ -169,7 +169,7 @@ Three tiers (agents pick what works for them):
 
 1. **File-based** (zero integration): agent appends JSONL to `.git/agx/events/{session_id}.jsonl`, agx tails and ingests
 2. **CLI-based**: `agx record event --kind tool_call --data '{...}'`
-3. **Socket-based** (lowest latency): Unix domain socket at `/tmp/agx-{pid}.sock`, JSONL protocol, batched SQLite inserts
+3. **Socket-based** (lowest latency, future): Unix domain socket at `/tmp/agx-{pid}.sock`, JSONL protocol, batched SQLite inserts. To be added when low-latency ingestion is needed.
 
 Discovery via `.agx-session` file written in each worktree root (contains session_id, socket path, etc.).
 
