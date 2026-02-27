@@ -10,7 +10,8 @@ pub const Ulid = struct {
 
     /// Generate a new ULID using current time and crypto random.
     pub fn new() Ulid {
-        const ms: u64 = @intCast(std.time.milliTimestamp());
+        const raw = std.time.milliTimestamp();
+        const ms: u64 = if (raw < 0) 0 else @intCast(raw);
         return fromParts(ms, null);
     }
 

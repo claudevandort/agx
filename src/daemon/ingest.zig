@@ -97,7 +97,42 @@ pub fn ingestFile(
     file_path: []const u8,
     offset: usize,
 ) !struct { result: IngestResult, new_offset: usize } {
-    const content = std.fs.cwd().readFileAlloc(alloc, file_path, 50 * 1024 * 1024) catch {
+    const file = std.fs.cwd().openFile(file_path, .{}) catch {
+        return .{
+            .result = .{ .events_ingested = 0, .events_skipped = 0, .errors = 1 },
+            .new_offset = offset,
+        };
+    };
+    defer file.close();
+
+    // Get file size to check if there's new content
+    const stat = file.stat() catch {
+        return .{
+            .result = .{ .events_ingested = 0, .events_skipped = 0, .errors = 1 },
+            .new_offset = offset,
+        };
+    };
+    const file_size = stat.size;
+
+    if (file_size <= offset) {
+        return .{
+            .result = .{ .events_ingested = 0, .events_skipped = 0, .errors = 0 },
+            .new_offset = offset,
+        };
+    }
+
+    // Seek to offset and read only new content
+    file.seekTo(offset) catch {
+        return .{
+            .result = .{ .events_ingested = 0, .events_skipped = 0, .errors = 1 },
+            .new_offset = offset,
+        };
+    };
+
+    const new_len = file_size - offset;
+    const max_read: usize = 50 * 1024 * 1024;
+    const to_read = @min(new_len, max_read);
+    const content = alloc.alloc(u8, to_read) catch {
         return .{
             .result = .{ .events_ingested = 0, .events_skipped = 0, .errors = 1 },
             .new_offset = offset,
@@ -105,59 +140,139 @@ pub fn ingestFile(
     };
     defer alloc.free(content);
 
-    if (content.len <= offset) {
+    const bytes_read = file.readAll(content) catch {
         return .{
-            .result = .{ .events_ingested = 0, .events_skipped = 0, .errors = 0 },
+            .result = .{ .events_ingested = 0, .events_skipped = 0, .errors = 1 },
             .new_offset = offset,
         };
-    }
+    };
 
-    const result = try ingestContent(alloc, store, session_id, content, offset);
-    return .{ .result = result, .new_offset = content.len };
+    // Pass 0 as offset since content already starts at the right position
+    const result = try ingestContent(alloc, store, session_id, content[0..bytes_read], 0);
+    return .{ .result = result, .new_offset = offset + bytes_read };
 }
 
 // ── Minimal JSON value extraction ──
 
-fn extractStringValue(json: []const u8, key: []const u8) ?[]const u8 {
-    const key_pos = std.mem.indexOf(u8, json, key) orelse return null;
-    const after_key = json[key_pos + key.len ..];
-
-    // Skip ':'  and whitespace
+/// Find a top-level key in a flat JSON object and return the position after the colon.
+/// Skips over string values to avoid matching keys inside values.
+fn findTopLevelKey(json: []const u8, key: []const u8) ?usize {
     var i: usize = 0;
-    while (i < after_key.len and (after_key[i] == ':' or after_key[i] == ' ')) : (i += 1) {}
-    if (i >= after_key.len or after_key[i] != '"') return null;
-    i += 1; // skip opening quote
-
-    // Find closing quote (handle escaped quotes)
-    const start = i;
-    while (i < after_key.len) : (i += 1) {
-        if (after_key[i] == '\\') {
-            i += 1; // skip escaped char
+    while (i < json.len) {
+        // Skip whitespace
+        if (json[i] == ' ' or json[i] == '\t' or json[i] == '\n' or json[i] == '\r' or json[i] == ',' or json[i] == '{') {
+            i += 1;
             continue;
         }
-        if (after_key[i] == '"') {
-            return after_key[start..i];
+        // At a string — check if it matches the key
+        if (json[i] == '"') {
+            const match = i + key.len <= json.len and std.mem.eql(u8, json[i .. i + key.len], key);
+            // Skip past this string
+            i += 1;
+            while (i < json.len) : (i += 1) {
+                if (json[i] == '\\') {
+                    i += 1;
+                    continue;
+                }
+                if (json[i] == '"') {
+                    i += 1;
+                    break;
+                }
+            }
+            if (match) {
+                // Skip colon and whitespace
+                while (i < json.len and (json[i] == ':' or json[i] == ' ')) : (i += 1) {}
+                return i;
+            }
+            // Not our key — skip the value
+            if (i < json.len and json[i] == ':') {
+                i += 1;
+                while (i < json.len and json[i] == ' ') : (i += 1) {}
+                i = skipJsonValue(json, i);
+            }
+            continue;
+        }
+        // Skip any other character (closing brace, etc.)
+        i += 1;
+    }
+    return null;
+}
+
+/// Skip over a JSON value (string, number, object, array, bool, null).
+fn skipJsonValue(json: []const u8, start: usize) usize {
+    if (start >= json.len) return start;
+    var i = start;
+    switch (json[i]) {
+        '"' => {
+            i += 1;
+            while (i < json.len) : (i += 1) {
+                if (json[i] == '\\') {
+                    i += 1;
+                    continue;
+                }
+                if (json[i] == '"') return i + 1;
+            }
+            return i;
+        },
+        '{', '[' => {
+            const close: u8 = if (json[i] == '{') '}' else ']';
+            var depth: u32 = 1;
+            i += 1;
+            while (i < json.len and depth > 0) : (i += 1) {
+                if (json[i] == '"') {
+                    i += 1;
+                    while (i < json.len) : (i += 1) {
+                        if (json[i] == '\\') {
+                            i += 1;
+                            continue;
+                        }
+                        if (json[i] == '"') break;
+                    }
+                } else if (json[i] == json[start]) {
+                    depth += 1;
+                } else if (json[i] == close) {
+                    depth -= 1;
+                }
+            }
+            return i;
+        },
+        else => {
+            // number, true, false, null
+            while (i < json.len and json[i] != ',' and json[i] != '}' and json[i] != ']') : (i += 1) {}
+            return i;
+        },
+    }
+}
+
+fn extractStringValue(json: []const u8, key: []const u8) ?[]const u8 {
+    const pos = findTopLevelKey(json, key) orelse return null;
+    if (pos >= json.len or json[pos] != '"') return null;
+
+    var i = pos + 1;
+    const start = i;
+    while (i < json.len) : (i += 1) {
+        if (json[i] == '\\') {
+            i += 1;
+            continue;
+        }
+        if (json[i] == '"') {
+            return json[start..i];
         }
     }
     return null;
 }
 
 fn extractIntValue(json: []const u8, key: []const u8) ?i64 {
-    const key_pos = std.mem.indexOf(u8, json, key) orelse return null;
-    const after_key = json[key_pos + key.len ..];
+    const pos = findTopLevelKey(json, key) orelse return null;
+    if (pos >= json.len) return null;
 
-    // Skip ':' and whitespace
-    var i: usize = 0;
-    while (i < after_key.len and (after_key[i] == ':' or after_key[i] == ' ')) : (i += 1) {}
-    if (i >= after_key.len) return null;
-
-    // Parse integer
+    var i = pos;
     const start = i;
-    if (after_key[i] == '-') i += 1;
-    while (i < after_key.len and after_key[i] >= '0' and after_key[i] <= '9') : (i += 1) {}
+    if (i < json.len and json[i] == '-') i += 1;
+    while (i < json.len and json[i] >= '0' and json[i] <= '9') : (i += 1) {}
     if (i == start) return null;
 
-    return std.fmt.parseInt(i64, after_key[start..i], 10) catch null;
+    return std.fmt.parseInt(i64, json[start..i], 10) catch null;
 }
 
 // ── Tests ──
@@ -192,4 +307,14 @@ test "parseLine missing kind" {
 test "parseLine empty" {
     try std.testing.expectError(error.InvalidJson, parseLine(""));
     try std.testing.expectError(error.InvalidJson, parseLine("not json"));
+}
+
+test "parseLine key inside value does not confuse parser" {
+    // "data" value contains the string "kind" — should not match as the kind key
+    const line =
+        \\{"data":"kind","kind":"decision"}
+    ;
+    const raw = try parseLine(line);
+    try std.testing.expectEqualSlices(u8, "decision", raw.kind);
+    try std.testing.expectEqualSlices(u8, "kind", raw.data.?);
 }

@@ -93,7 +93,7 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     else
         .table;
 
-    try agx.compare_renderer.render(stdout, metrics, format, task.description);
+    try agx.compare_renderer.render(alloc, stdout, metrics, format, task.description);
     try stdout.flush();
 }
 

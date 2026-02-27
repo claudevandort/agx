@@ -16,6 +16,10 @@ const ingest_cmd = @import("cli/ingest.zig");
 const record_cmd = @import("cli/record.zig");
 const log_cmd = @import("cli/log.zig");
 
+// NOTE: CLI commands call std.process.exit(1) on user-facing errors, which skips
+// defer cleanup (store.deinit, GPA leak detection). This is an accepted trade-off
+// for CLI ergonomics — the OS reclaims resources on exit. For long-running modes
+// (e.g., ingest --watch), errors are handled without process.exit.
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();

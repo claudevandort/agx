@@ -59,9 +59,16 @@ pub const GitCli = struct {
     }
 
     /// Run a git command, return error if it fails.
+    /// On failure, logs the stderr output before returning the error.
     pub fn runChecked(self: *const GitCli, args: []const []const u8) !GitResult {
         const result = try self.run(args);
         if (!result.success) {
+            if (result.stderr.len > 0) {
+                const trimmed = std.mem.trimRight(u8, result.stderr, "\n\r ");
+                if (trimmed.len > 0) {
+                    std.log.err("git: {s}", .{trimmed});
+                }
+            }
             result.deinit(self.alloc);
             return error.GitCommandFailed;
         }
@@ -204,9 +211,20 @@ pub const GitCli = struct {
         return std.fmt.parseInt(u32, trimmed, 10) catch 0;
     }
 
+    /// Three-way diff: show changes from base to head1 alongside base to head2.
+    /// Uses merge-base to compute the common ancestor, then diffs both heads.
     pub fn diffThreeWay(self: *const GitCli, base: []const u8, head1: []const u8, head2: []const u8) ![]u8 {
-        _ = base;
-        const result = try self.runChecked(&.{ "diff", head1, head2 });
+        // Compute merge-base between the two heads rooted at base
+        const merge_base = self.runTrimmed(&.{ "merge-base", base, head1 }) catch base;
+        const should_free_merge_base = !std.mem.eql(u8, merge_base, base);
+
+        // Diff head1 vs head2 relative to their common ancestor
+        // Using diff with ... notation via merge-base
+        const range = try std.fmt.allocPrint(self.alloc, "{s}...{s}", .{ head1, head2 });
+        defer self.alloc.free(range);
+        if (should_free_merge_base) self.alloc.free(merge_base);
+
+        const result = try self.runChecked(&.{ "diff", range });
         self.alloc.free(result.stderr);
         return result.stdout;
     }

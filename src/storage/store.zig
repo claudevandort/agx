@@ -199,6 +199,13 @@ pub const Store = struct {
             buf[count] = try self.readExploration(&stmt);
             count += 1;
         }
+        if (count == buf.len) {
+            // Check if there are more rows we couldn't fit
+            const extra = try stmt.step();
+            if (extra == .row) {
+                std.log.warn("getExplorationsByTask: buffer full ({d}), results truncated", .{buf.len});
+            }
+        }
         return buf[0..count];
     }
 
@@ -333,6 +340,12 @@ pub const Store = struct {
             };
             count += 1;
         }
+        if (count == buf.len) {
+            const extra = try stmt.step();
+            if (extra == .row) {
+                std.log.warn("getSessionsByExploration: buffer full ({d}), results truncated", .{buf.len});
+            }
+        }
         return buf[0..count];
     }
 
@@ -456,6 +469,12 @@ pub const Store = struct {
                 .recorded_at = stmt.columnInt64(7),
             };
             count += 1;
+        }
+        if (count == buf.len) {
+            const extra = try stmt.step();
+            if (extra == .row) {
+                std.log.warn("getEvidenceByExploration: buffer full ({d}), results truncated", .{buf.len});
+            }
         }
         return buf[0..count];
     }

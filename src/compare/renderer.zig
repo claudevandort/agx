@@ -14,18 +14,20 @@ pub const Format = enum {
 };
 
 pub fn render(
+    alloc: Allocator,
     writer: *std.Io.Writer,
     metrics: []const ExplorationMetrics,
     format: Format,
     task_description: []const u8,
 ) !void {
     switch (format) {
-        .table => try renderTable(writer, metrics, task_description),
+        .table => try renderTable(alloc, writer, metrics, task_description),
         .json => try renderJson(writer, metrics, task_description),
     }
 }
 
 fn renderTable(
+    alloc: Allocator,
     w: *std.Io.Writer,
     metrics: []const ExplorationMetrics,
     task_description: []const u8,
@@ -91,7 +93,8 @@ fn renderTable(
         }
         if (m.ended_at) |end| {
             const elapsed_ms = end - m.started_at;
-            try w.print(" {s}", .{fmtDuration(elapsed_ms)});
+            var dur_buf: [32]u8 = undefined;
+            try w.print(" {s}", .{fmtDuration(&dur_buf, elapsed_ms)});
         }
         try w.print("\n", .{});
         if (m.approach) |approach| {
@@ -104,13 +107,13 @@ fn renderTable(
 
     // File overlap matrix
     if (metrics.len > 1) {
-        try renderFileOverlap(w, metrics);
+        try renderFileOverlap(alloc, w, metrics);
     }
 }
 
-fn renderFileOverlap(w: *std.Io.Writer, metrics: []const ExplorationMetrics) !void {
+fn renderFileOverlap(alloc: Allocator, w: *std.Io.Writer, metrics: []const ExplorationMetrics) !void {
     // Collect all unique files
-    var all_files = std.StringHashMap(void).init(std.heap.page_allocator);
+    var all_files = std.StringHashMap(void).init(alloc);
     defer all_files.deinit();
 
     for (metrics) |m| {
@@ -219,20 +222,18 @@ fn writeJsonEscaped(writer: *std.Io.Writer, s: []const u8) !void {
     }
 }
 
-var duration_buf: [32]u8 = undefined;
-
-fn fmtDuration(ms: i64) []const u8 {
+fn fmtDuration(buf: *[32]u8, ms: i64) []const u8 {
     if (ms < 0) return "?";
     const secs = @divTrunc(ms, 1000);
     if (secs < 60) {
-        return std.fmt.bufPrint(&duration_buf, "{d}s", .{secs}) catch "?";
+        return std.fmt.bufPrint(buf, "{d}s", .{secs}) catch "?";
     }
     const mins = @divTrunc(secs, 60);
     const rem_secs = @rem(secs, 60);
     if (mins < 60) {
-        return std.fmt.bufPrint(&duration_buf, "{d}m{d}s", .{ mins, rem_secs }) catch "?";
+        return std.fmt.bufPrint(buf, "{d}m{d}s", .{ mins, rem_secs }) catch "?";
     }
     const hours = @divTrunc(mins, 60);
     const rem_mins = @rem(mins, 60);
-    return std.fmt.bufPrint(&duration_buf, "{d}h{d}m", .{ hours, rem_mins }) catch "?";
+    return std.fmt.bufPrint(buf, "{d}h{d}m", .{ hours, rem_mins }) catch "?";
 }

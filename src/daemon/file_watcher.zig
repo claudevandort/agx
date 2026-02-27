@@ -38,9 +38,11 @@ pub fn scanAndIngest(
 
         const result = try ingest.ingestFile(alloc, store, session_id, file_path, current_offset);
 
-        // Persist new offset
+        // Persist new offset — warn on failure since duplicate events may result
         if (result.new_offset > current_offset) {
-            store.setIngestOffset(entry.name, result.new_offset) catch {};
+            store.setIngestOffset(entry.name, result.new_offset) catch {
+                std.log.warn("failed to persist ingest offset for {s}; duplicates may occur on next scan", .{entry.name});
+            };
         }
 
         total.events_ingested += result.result.events_ingested;
