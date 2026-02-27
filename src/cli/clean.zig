@@ -1,26 +1,16 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const agx = @import("agx");
+const CliContext = @import("cli_common.zig").CliContext;
 
 pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !void {
     _ = args;
 
-    const git = agx.GitCli.init(alloc, null);
-    const git_dir = git.gitDir() catch {
-        try stderr.print("error: not a git repository\n", .{});
-        try stderr.flush();
-        std.process.exit(1);
-    };
-    defer alloc.free(git_dir);
-
-    const db_path = try std.fmt.allocPrintSentinel(alloc, "{s}/agx/db.sqlite3", .{git_dir}, 0);
-    defer alloc.free(db_path);
-
-    var store = try agx.Store.init(alloc, db_path);
-    defer store.deinit();
+    var ctx = CliContext.open(alloc, stderr);
+    defer ctx.deinit();
 
     // Find all resolved tasks
-    var stmt = try store.db.prepare(
+    var stmt = try ctx.store.db.prepare(
         "SELECT id FROM tasks WHERE status = 'resolved'",
     );
     defer stmt.finalize();
@@ -39,36 +29,31 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
 
         // Get explorations for this task
         var exp_buf: [32]agx.Exploration = undefined;
-        const exps = store.getExplorationsByTask(task_id, &exp_buf) catch continue;
-        defer for (exps) |e| {
-            alloc.free(e.worktree_path);
-            alloc.free(e.branch_name);
-            if (e.approach) |a| alloc.free(a);
-            if (e.summary) |s| alloc.free(s);
-        };
+        const exps = ctx.store.getExplorationsByTask(task_id, &exp_buf) catch continue;
+        defer agx.Exploration.deinitSlice(alloc, exps);
 
         for (exps) |e| {
             // Remove worktree if it still exists
-            git.removeWorktree(e.worktree_path) catch {};
+            ctx.git.removeWorktree(e.worktree_path) catch {};
             cleaned_worktrees += 1;
 
             // Delete branch (except kept ones — they've been merged)
             if (e.status != .kept) {
-                git.deleteBranch(e.branch_name) catch {};
+                ctx.git.deleteBranch(e.branch_name) catch {};
                 cleaned_branches += 1;
             }
         }
 
         // Remove the worktree directory structure
         const task_short = task_id.short(6);
-        const worktree_dir = std.fmt.allocPrint(alloc, "{s}/agx/worktrees/{s}", .{ git_dir, &task_short }) catch continue;
+        const worktree_dir = std.fmt.allocPrint(alloc, "{s}/agx/worktrees/{s}", .{ ctx.git_dir, &task_short }) catch continue;
         defer alloc.free(worktree_dir);
         std.fs.cwd().deleteTree(worktree_dir) catch {};
 
         // Remove evidence directory
         for (exps) |e| {
             const exp_id_str = e.id.encode();
-            const evidence_dir = std.fmt.allocPrint(alloc, "{s}/agx/evidence/{s}", .{ git_dir, &exp_id_str }) catch continue;
+            const evidence_dir = std.fmt.allocPrint(alloc, "{s}/agx/evidence/{s}", .{ ctx.git_dir, &exp_id_str }) catch continue;
             defer alloc.free(evidence_dir);
             std.fs.cwd().deleteTree(evidence_dir) catch {};
         }

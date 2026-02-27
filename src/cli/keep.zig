@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const agx = @import("agx");
+const CliContext = @import("cli_common.zig").CliContext;
 
 pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !void {
     var index_str: ?[]const u8 = null;
@@ -45,48 +46,28 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         std.process.exit(1);
     } else .merge;
 
-    const git = agx.GitCli.init(alloc, null);
-    const git_dir = git.gitDir() catch {
-        try stderr.print("error: not a git repository\n", .{});
-        try stderr.flush();
-        std.process.exit(1);
-    };
-    defer alloc.free(git_dir);
+    var ctx = CliContext.open(alloc, stderr);
+    defer ctx.deinit();
 
-    const db_path = try std.fmt.allocPrintSentinel(alloc, "{s}/agx/db.sqlite3", .{git_dir}, 0);
-    defer alloc.free(db_path);
-
-    var store = try agx.Store.init(alloc, db_path);
-    defer store.deinit();
-
-    const task = store.getActiveTask() catch {
+    const task = ctx.store.getActiveTask() catch {
         try stderr.print("error: no active task found\n", .{});
         try stderr.flush();
         std.process.exit(1);
         unreachable;
     };
-    defer {
-        alloc.free(task.description);
-        alloc.free(task.base_commit);
-        alloc.free(task.base_branch);
-    }
+    defer task.deinit(alloc);
 
-    const exp = store.getExplorationByIndex(task.id, index) catch {
+    const exp = ctx.store.getExplorationByIndex(task.id, index) catch {
         try stderr.print("error: exploration [{d}] not found\n", .{index});
         try stderr.flush();
         std.process.exit(1);
         unreachable;
     };
-    defer {
-        alloc.free(exp.worktree_path);
-        alloc.free(exp.branch_name);
-        if (exp.approach) |a| alloc.free(a);
-        if (exp.summary) |s| alloc.free(s);
-    }
+    defer exp.deinit(alloc);
 
     // Checkout base branch
     try stdout.print("Checking out {s}...\n", .{task.base_branch});
-    git.checkout(task.base_branch) catch {
+    ctx.git.checkout(task.base_branch) catch {
         try stderr.print("error: could not checkout base branch '{s}'\n", .{task.base_branch});
         try stderr.flush();
         std.process.exit(1);
@@ -95,7 +76,7 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     // Merge exploration branch
     const strategy_name: []const u8 = if (strategy_str) |s| s else "merge";
     try stdout.print("Merging [{d}] via {s}...\n", .{ index, strategy_name });
-    git.mergeBranch(exp.branch_name, strategy) catch {
+    ctx.git.mergeBranch(exp.branch_name, strategy) catch {
         try stderr.print("error: merge failed — resolve conflicts manually\n", .{});
         try stderr.flush();
         std.process.exit(1);
@@ -103,13 +84,8 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
 
     // Add commit trailers
     var sess_buf: [8]agx.Session = undefined;
-    const sessions = store.getSessionsByExploration(exp.id, &sess_buf) catch &[_]agx.Session{};
-    defer for (sessions) |sess| {
-        if (sess.agent_type) |a| alloc.free(a);
-        if (sess.model_version) |m| alloc.free(m);
-        if (sess.environment_fingerprint) |e| alloc.free(e);
-        if (sess.initial_prompt) |p| alloc.free(p);
-    };
+    const sessions = ctx.store.getSessionsByExploration(exp.id, &sess_buf) catch &[_]agx.Session{};
+    defer agx.Session.deinitSlice(alloc, sessions);
 
     const task_short = task.id.short(6);
 
@@ -141,20 +117,20 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         }
     }
 
-    git.addTrailers(trailers[0..ti]) catch {
+    ctx.git.addTrailers(trailers[0..ti]) catch {
         try stderr.print("warning: could not add commit trailers\n", .{});
         try stderr.flush();
     };
 
     // Update DB: mark exploration as kept, resolve task
-    try store.updateExplorationStatus(exp.id, .kept, null);
-    try store.updateTaskStatus(task.id, .resolved, exp.id);
+    try ctx.store.updateExplorationStatus(exp.id, .kept, null);
+    try ctx.store.updateTaskStatus(task.id, .resolved, exp.id);
 
     // Export context if requested
     if (preserve_context) {
         if (agx.context_export.exportTaskContext(
             alloc,
-            &store,
+            &ctx.store,
             &task,
             ".agx/context",
         )) |context_dir| {
@@ -170,20 +146,15 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     if (!no_cleanup) {
         try stdout.print("Cleaning up worktrees...\n", .{});
         var exp_buf: [32]agx.Exploration = undefined;
-        const all_exps = try store.getExplorationsByTask(task.id, &exp_buf);
-        defer for (all_exps) |e| {
-            alloc.free(e.worktree_path);
-            alloc.free(e.branch_name);
-            if (e.approach) |a| alloc.free(a);
-            if (e.summary) |s| alloc.free(s);
-        };
+        const all_exps = try ctx.store.getExplorationsByTask(task.id, &exp_buf);
+        defer agx.Exploration.deinitSlice(alloc, all_exps);
 
         for (all_exps) |e| {
-            git.removeWorktree(e.worktree_path) catch {};
+            ctx.git.removeWorktree(e.worktree_path) catch {};
             // Delete non-kept branches
             if (e.index != index) {
-                git.deleteBranch(e.branch_name) catch {};
-                try store.updateExplorationStatus(e.id, .discarded, null);
+                ctx.git.deleteBranch(e.branch_name) catch {};
+                try ctx.store.updateExplorationStatus(e.id, .discarded, null);
             }
         }
     }

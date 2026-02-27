@@ -8,6 +8,24 @@ const Event = @import("../core/event.zig").Event;
 const Evidence = @import("../core/evidence.zig").Evidence;
 const Store = @import("store.zig").Store;
 
+/// Write a JSON-escaped version of `s` to `writer`.
+/// Escapes: \, ", control chars (as \uXXXX), newlines, tabs.
+fn writeJsonEscaped(writer: *std.Io.Writer, s: []const u8) !void {
+    for (s) |c| {
+        switch (c) {
+            '"' => try writer.print("\\\"", .{}),
+            '\\' => try writer.print("\\\\", .{}),
+            '\n' => try writer.print("\\n", .{}),
+            '\r' => try writer.print("\\r", .{}),
+            '\t' => try writer.print("\\t", .{}),
+            0x00...0x08, 0x0B, 0x0C, 0x0E...0x1F => {
+                try writer.print("\\u{x:0>4}", .{@as(u16, c)});
+            },
+            else => try writer.print("{c}", .{c}),
+        }
+    }
+}
+
 /// Export all context for a task to .agx/context/{task_id}/.
 /// Produces: summary.md, sessions.jsonl, evidence.json, decision_log.md
 pub fn exportTaskContext(
@@ -25,12 +43,7 @@ pub fn exportTaskContext(
     // Get all explorations for this task
     var exp_buf: [32]Exploration = undefined;
     const explorations = try store.getExplorationsByTask(task.id, &exp_buf);
-    defer for (explorations) |e| {
-        alloc.free(e.worktree_path);
-        alloc.free(e.branch_name);
-        if (e.approach) |a| alloc.free(a);
-        if (e.summary) |s| alloc.free(s);
-    };
+    defer Exploration.deinitSlice(alloc, explorations);
 
     try writeSummary(alloc, store, task, explorations, context_dir);
     try writeSessionsJsonl(alloc, store, explorations, context_dir);
@@ -133,19 +146,22 @@ fn writeSessionsJsonl(
     for (explorations) |exp| {
         var sess_buf: [8]Session = undefined;
         const sessions = store.getSessionsByExploration(exp.id, &sess_buf) catch continue;
-        defer for (sessions) |sess| {
-            if (sess.agent_type) |a| alloc.free(a);
-            if (sess.model_version) |m| alloc.free(m);
-            if (sess.environment_fingerprint) |e| alloc.free(e);
-            if (sess.initial_prompt) |p| alloc.free(p);
-        };
+        defer Session.deinitSlice(alloc, sessions);
 
         for (sessions) |sess| {
             // Write session header
             const sess_id_str = sess.id.encode();
             try w.print("{{\"type\":\"session\",\"id\":\"{s}\",\"exploration_index\":{d}", .{ &sess_id_str, exp.index });
-            if (sess.agent_type) |at| try w.print(",\"agent_type\":\"{s}\"", .{at});
-            if (sess.model_version) |mv| try w.print(",\"model_version\":\"{s}\"", .{mv});
+            if (sess.agent_type) |at| {
+                try w.print(",\"agent_type\":\"", .{});
+                try writeJsonEscaped(w, at);
+                try w.print("\"", .{});
+            }
+            if (sess.model_version) |mv| {
+                try w.print(",\"model_version\":\"", .{});
+                try writeJsonEscaped(w, mv);
+                try w.print("\"", .{});
+            }
             try w.print(",\"started_at\":{d}", .{sess.started_at});
             if (sess.ended_at) |ea| try w.print(",\"ended_at\":{d}", .{ea});
             if (sess.exit_reason) |er| try w.print(",\"exit_reason\":\"{s}\"", .{er.toStr()});
@@ -154,9 +170,7 @@ fn writeSessionsJsonl(
             // Write events for this session
             var ev_buf: [512]Event = undefined;
             const events = store.getEventsBySession(sess.id, null, &ev_buf) catch continue;
-            defer for (events) |ev| {
-                if (ev.data) |d| alloc.free(d);
-            };
+            defer Event.deinitSlice(alloc, events);
 
             for (events) |ev| {
                 try w.print("{{\"type\":\"event\",\"kind\":\"{s}\",\"created_at\":{d}", .{ ev.kind.toStr(), ev.created_at });
@@ -195,11 +209,7 @@ fn writeEvidenceJson(
     for (explorations) |exp| {
         var ev_buf: [64]Evidence = undefined;
         const evidence = store.getEvidenceByExploration(exp.id, &ev_buf) catch continue;
-        defer for (evidence) |ev| {
-            if (ev.hash) |h| alloc.free(h);
-            if (ev.summary) |s| alloc.free(s);
-            if (ev.raw_path) |p| alloc.free(p);
-        };
+        defer Evidence.deinitSlice(alloc, evidence);
 
         for (evidence) |ev| {
             if (!first) try w.print(",", .{});
@@ -209,9 +219,21 @@ fn writeEvidenceJson(
                 ev.kind.toStr(),
                 ev.status.toStr(),
             });
-            if (ev.hash) |h| try w.print(",\"hash\":\"{s}\"", .{h});
-            if (ev.summary) |s| try w.print(",\"summary\":\"{s}\"", .{s});
-            if (ev.raw_path) |p| try w.print(",\"raw_path\":\"{s}\"", .{p});
+            if (ev.hash) |h| {
+                try w.print(",\"hash\":\"", .{});
+                try writeJsonEscaped(w, h);
+                try w.print("\"", .{});
+            }
+            if (ev.summary) |s| {
+                try w.print(",\"summary\":\"", .{});
+                try writeJsonEscaped(w, s);
+                try w.print("\"", .{});
+            }
+            if (ev.raw_path) |p| {
+                try w.print(",\"raw_path\":\"", .{});
+                try writeJsonEscaped(w, p);
+                try w.print("\"", .{});
+            }
             try w.print(",\"recorded_at\":{d}}}", .{ev.recorded_at});
         }
     }
@@ -245,19 +267,12 @@ fn writeDecisionLog(
     for (explorations) |exp| {
         var sess_buf: [8]Session = undefined;
         const sessions = store.getSessionsByExploration(exp.id, &sess_buf) catch continue;
-        defer for (sessions) |sess| {
-            if (sess.agent_type) |a| alloc.free(a);
-            if (sess.model_version) |m| alloc.free(m);
-            if (sess.environment_fingerprint) |e| alloc.free(e);
-            if (sess.initial_prompt) |p| alloc.free(p);
-        };
+        defer Session.deinitSlice(alloc, sessions);
 
         for (sessions) |sess| {
             var ev_buf: [256]Event = undefined;
             const events = store.getEventsBySession(sess.id, "decision", &ev_buf) catch continue;
-            defer for (events) |ev| {
-                if (ev.data) |d| alloc.free(d);
-            };
+            defer Event.deinitSlice(alloc, events);
 
             if (events.len > 0 and !has_decisions) {
                 has_decisions = true;

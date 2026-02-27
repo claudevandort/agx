@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const agx = @import("agx");
+const CliContext = @import("cli_common.zig").CliContext;
 
 pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !void {
     var index_str: ?[]const u8 = null;
@@ -38,63 +39,32 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         std.process.exit(1);
     };
 
-    const git = agx.GitCli.init(alloc, null);
-    const git_dir = git.gitDir() catch {
-        try stderr.print("error: not a git repository\n", .{});
-        try stderr.flush();
-        std.process.exit(1);
-    };
-    defer alloc.free(git_dir);
-
-    const db_path = try std.fmt.allocPrintSentinel(alloc, "{s}/agx/db.sqlite3", .{git_dir}, 0);
-    defer alloc.free(db_path);
-
-    std.fs.cwd().access(db_path[0..db_path.len :0], .{}) catch {
-        try stderr.print("error: agx not initialized. Run 'agx init' first.\n", .{});
-        try stderr.flush();
-        std.process.exit(1);
-    };
-
-    var store = try agx.Store.init(alloc, db_path);
-    defer store.deinit();
+    var ctx = CliContext.open(alloc, stderr);
+    defer ctx.deinit();
 
     // Find the active task
-    const task = store.getActiveTask() catch {
+    const task = ctx.store.getActiveTask() catch {
         // Try to find any task with this exploration index
         try stderr.print("error: no active task found\n", .{});
         try stderr.flush();
         std.process.exit(1);
         unreachable;
     };
-    defer {
-        alloc.free(task.description);
-        alloc.free(task.base_commit);
-        alloc.free(task.base_branch);
-    }
+    defer task.deinit(alloc);
 
     // Find exploration by index
-    const exp = store.getExplorationByIndex(task.id, index) catch {
+    const exp = ctx.store.getExplorationByIndex(task.id, index) catch {
         try stderr.print("error: exploration [{d}] not found\n", .{index});
         try stderr.flush();
         std.process.exit(1);
         unreachable;
     };
-    defer {
-        alloc.free(exp.worktree_path);
-        alloc.free(exp.branch_name);
-        if (exp.approach) |a| alloc.free(a);
-        if (exp.summary) |s| alloc.free(s);
-    }
+    defer exp.deinit(alloc);
 
     // Get sessions for this exploration
     var sess_buf: [8]agx.Session = undefined;
-    const sessions = try store.getSessionsByExploration(exp.id, &sess_buf);
-    defer for (sessions) |sess| {
-        if (sess.agent_type) |a| alloc.free(a);
-        if (sess.model_version) |m| alloc.free(m);
-        if (sess.environment_fingerprint) |e| alloc.free(e);
-        if (sess.initial_prompt) |p| alloc.free(p);
-    };
+    const sessions = try ctx.store.getSessionsByExploration(exp.id, &sess_buf);
+    defer agx.Session.deinitSlice(alloc, sessions);
 
     if (sessions.len == 0) {
         try stdout.print("No sessions found for exploration [{d}]\n", .{index});
@@ -123,10 +93,8 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     const buf_limit = @min(limit, ev_buf.len);
 
     for (sessions) |sess| {
-        const events = try store.getEventsBySession(sess.id, kind_filter, ev_buf[0..buf_limit]);
-        defer for (events) |ev| {
-            if (ev.data) |d| alloc.free(d);
-        };
+        const events = try ctx.store.getEventsBySession(sess.id, kind_filter, ev_buf[0..buf_limit]);
+        defer agx.Event.deinitSlice(alloc, events);
 
         for (events) |ev| {
             if (format_json) {
@@ -134,7 +102,15 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
                 first_json = false;
                 try stdout.print("{{\"kind\":\"{s}\",\"created_at\":{d}", .{ ev.kind.toStr(), ev.created_at });
                 if (ev.data) |d| {
-                    try stdout.print(",\"data\":{s}", .{d});
+                    // data is expected to be a raw JSON value, but validate
+                    // it starts with { or [ or " — otherwise escape as string
+                    if (d.len > 0 and (d[0] == '{' or d[0] == '[' or d[0] == '"')) {
+                        try stdout.print(",\"data\":{s}", .{d});
+                    } else {
+                        try stdout.print(",\"data\":\"", .{});
+                        try writeJsonEscaped(stdout, d);
+                        try stdout.print("\"", .{});
+                    }
                 }
                 try stdout.print("}}", .{});
             } else {
@@ -161,6 +137,22 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         try stdout.print("\n", .{});
     }
     try stdout.flush();
+}
+
+fn writeJsonEscaped(writer: *std.Io.Writer, s: []const u8) !void {
+    for (s) |c| {
+        switch (c) {
+            '"' => try writer.print("\\\"", .{}),
+            '\\' => try writer.print("\\\\", .{}),
+            '\n' => try writer.print("\\n", .{}),
+            '\r' => try writer.print("\\r", .{}),
+            '\t' => try writer.print("\\t", .{}),
+            0x00...0x08, 0x0B, 0x0C, 0x0E...0x1F => {
+                try writer.print("\\u{x:0>4}", .{@as(u16, c)});
+            },
+            else => try writer.print("{c}", .{c}),
+        }
+    }
 }
 
 fn printEvent(w: *std.Io.Writer, ev: *const agx.Event) !void {

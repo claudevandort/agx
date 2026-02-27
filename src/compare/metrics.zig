@@ -138,11 +138,7 @@ fn collectOne(
     // Evidence
     var ev_buf: [64]Evidence = undefined;
     const evidence = try store.getEvidenceByExploration(exp.id, &ev_buf);
-    defer for (evidence) |ev| {
-        if (ev.hash) |h| alloc.free(h);
-        if (ev.summary) |s| alloc.free(s);
-        if (ev.raw_path) |p| alloc.free(p);
-    };
+    defer Evidence.deinitSlice(alloc, evidence);
 
     var tests_pass: u32 = 0;
     var tests_fail: u32 = 0;
@@ -167,12 +163,7 @@ fn collectOne(
     // Session info (use first session)
     var sess_buf: [8]Session = undefined;
     const sessions = try store.getSessionsByExploration(exp.id, &sess_buf);
-    defer for (sessions) |sess| {
-        if (sess.agent_type) |a| alloc.free(a);
-        if (sess.model_version) |m| alloc.free(m);
-        if (sess.environment_fingerprint) |e| alloc.free(e);
-        if (sess.initial_prompt) |p| alloc.free(p);
-    };
+    defer Session.deinitSlice(alloc, sessions);
 
     var agent_type: ?[]const u8 = null;
     var model_version: ?[]const u8 = null;

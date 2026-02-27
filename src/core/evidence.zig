@@ -1,3 +1,5 @@
+const std = @import("std");
+const Allocator = std.mem.Allocator;
 const Ulid = @import("ulid.zig").Ulid;
 
 pub const EvidenceKind = enum {
@@ -9,24 +11,13 @@ pub const EvidenceKind = enum {
     custom,
 
     pub fn toStr(self: EvidenceKind) []const u8 {
-        return switch (self) {
-            .test_result => "test_result",
-            .build_output => "build_output",
-            .coverage_report => "coverage_report",
-            .lint_result => "lint_result",
-            .benchmark => "benchmark",
-            .custom => "custom",
-        };
+        return @tagName(self);
     }
 
     pub fn fromStr(s: []const u8) !EvidenceKind {
-        const mem = @import("std").mem;
-        if (mem.eql(u8, s, "test_result")) return .test_result;
-        if (mem.eql(u8, s, "build_output")) return .build_output;
-        if (mem.eql(u8, s, "coverage_report")) return .coverage_report;
-        if (mem.eql(u8, s, "lint_result")) return .lint_result;
-        if (mem.eql(u8, s, "benchmark")) return .benchmark;
-        if (mem.eql(u8, s, "custom")) return .custom;
+        inline for (@typeInfo(EvidenceKind).@"enum".fields) |f| {
+            if (std.mem.eql(u8, s, f.name)) return @enumFromInt(f.value);
+        }
         return error.InvalidEvidenceKind;
     }
 };
@@ -38,20 +29,13 @@ pub const EvidenceStatus = enum {
     skip,
 
     pub fn toStr(self: EvidenceStatus) []const u8 {
-        return switch (self) {
-            .pass => "pass",
-            .fail => "fail",
-            .@"error" => "error",
-            .skip => "skip",
-        };
+        return @tagName(self);
     }
 
     pub fn fromStr(s: []const u8) !EvidenceStatus {
-        const mem = @import("std").mem;
-        if (mem.eql(u8, s, "pass")) return .pass;
-        if (mem.eql(u8, s, "fail")) return .fail;
-        if (mem.eql(u8, s, "error")) return .@"error";
-        if (mem.eql(u8, s, "skip")) return .skip;
+        inline for (@typeInfo(EvidenceStatus).@"enum".fields) |f| {
+            if (std.mem.eql(u8, s, f.name)) return @enumFromInt(f.value);
+        }
         return error.InvalidEvidenceStatus;
     }
 };
@@ -65,4 +49,14 @@ pub const Evidence = struct {
     summary: ?[]const u8, // e.g. "47/47 tests passed"
     raw_path: ?[]const u8, // path to full output file
     recorded_at: i64,
+
+    pub fn deinit(self: *const Evidence, alloc: Allocator) void {
+        if (self.hash) |h| alloc.free(h);
+        if (self.summary) |s| alloc.free(s);
+        if (self.raw_path) |p| alloc.free(p);
+    }
+
+    pub fn deinitSlice(alloc: Allocator, slice: []const Evidence) void {
+        for (slice) |*e| e.deinit(alloc);
+    }
 };

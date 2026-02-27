@@ -1,3 +1,5 @@
+const std = @import("std");
+const Allocator = std.mem.Allocator;
 const Ulid = @import("ulid.zig").Ulid;
 
 pub const ExitReason = enum {
@@ -7,20 +9,13 @@ pub const ExitReason = enum {
     timeout,
 
     pub fn toStr(self: ExitReason) []const u8 {
-        return switch (self) {
-            .completed => "completed",
-            .interrupted => "interrupted",
-            .@"error" => "error",
-            .timeout => "timeout",
-        };
+        return @tagName(self);
     }
 
     pub fn fromStr(s: []const u8) !ExitReason {
-        const mem = @import("std").mem;
-        if (mem.eql(u8, s, "completed")) return .completed;
-        if (mem.eql(u8, s, "interrupted")) return .interrupted;
-        if (mem.eql(u8, s, "error")) return .@"error";
-        if (mem.eql(u8, s, "timeout")) return .timeout;
+        inline for (@typeInfo(ExitReason).@"enum".fields) |f| {
+            if (std.mem.eql(u8, s, f.name)) return @enumFromInt(f.value);
+        }
         return error.InvalidExitReason;
     }
 };
@@ -35,4 +30,15 @@ pub const Session = struct {
     exit_reason: ?ExitReason,
     started_at: i64,
     ended_at: ?i64,
+
+    pub fn deinit(self: *const Session, alloc: Allocator) void {
+        if (self.agent_type) |a| alloc.free(a);
+        if (self.model_version) |m| alloc.free(m);
+        if (self.environment_fingerprint) |e| alloc.free(e);
+        if (self.initial_prompt) |p| alloc.free(p);
+    }
+
+    pub fn deinitSlice(alloc: Allocator, slice: []const Session) void {
+        for (slice) |*s| s.deinit(alloc);
+    }
 };

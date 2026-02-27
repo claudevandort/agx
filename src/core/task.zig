@@ -1,3 +1,5 @@
+const std = @import("std");
+const Allocator = std.mem.Allocator;
 const Ulid = @import("ulid.zig").Ulid;
 
 pub const TaskStatus = enum {
@@ -6,22 +8,14 @@ pub const TaskStatus = enum {
     abandoned,
 
     pub fn toStr(self: TaskStatus) []const u8 {
-        return switch (self) {
-            .active => "active",
-            .resolved => "resolved",
-            .abandoned => "abandoned",
-        };
+        return @tagName(self);
     }
 
     pub fn fromStr(s: []const u8) !TaskStatus {
-        if (eql(s, "active")) return .active;
-        if (eql(s, "resolved")) return .resolved;
-        if (eql(s, "abandoned")) return .abandoned;
+        inline for (@typeInfo(TaskStatus).@"enum".fields) |f| {
+            if (std.mem.eql(u8, s, f.name)) return @enumFromInt(f.value);
+        }
         return error.InvalidStatus;
-    }
-
-    fn eql(a: []const u8, b: []const u8) bool {
-        return @import("std").mem.eql(u8, a, b);
     }
 };
 
@@ -34,4 +28,10 @@ pub const Task = struct {
     resolved_exploration_id: ?Ulid, // which exploration was kept
     created_at: i64, // ms since epoch
     updated_at: i64,
+
+    pub fn deinit(self: *const Task, alloc: Allocator) void {
+        alloc.free(self.description);
+        alloc.free(self.base_commit);
+        alloc.free(self.base_branch);
+    }
 };

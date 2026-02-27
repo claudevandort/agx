@@ -151,7 +151,9 @@ fn renderJson(
     metrics: []const ExplorationMetrics,
     task_description: []const u8,
 ) !void {
-    try w.print("{{\"task\":\"{s}\",\"explorations\":[", .{jsonEscape(task_description)});
+    try w.print("{{\"task\":\"", .{});
+    try writeJsonEscaped(w, task_description);
+    try w.print("\",\"explorations\":[", .{});
 
     for (metrics, 0..) |m, i| {
         if (i > 0) try w.print(",", .{});
@@ -166,22 +168,32 @@ fn renderJson(
         try w.print(",\"error_count\":{d}", .{m.error_count});
 
         if (m.approach) |a| {
-            try w.print(",\"approach\":\"{s}\"", .{jsonEscape(a)});
+            try w.print(",\"approach\":\"", .{});
+            try writeJsonEscaped(w, a);
+            try w.print("\"", .{});
         }
         if (m.summary) |s| {
-            try w.print(",\"summary\":\"{s}\"", .{jsonEscape(s)});
+            try w.print(",\"summary\":\"", .{});
+            try writeJsonEscaped(w, s);
+            try w.print("\"", .{});
         }
         if (m.agent_type) |a| {
-            try w.print(",\"agent_type\":\"{s}\"", .{jsonEscape(a)});
+            try w.print(",\"agent_type\":\"", .{});
+            try writeJsonEscaped(w, a);
+            try w.print("\"", .{});
         }
         if (m.model_version) |mv| {
-            try w.print(",\"model_version\":\"{s}\"", .{jsonEscape(mv)});
+            try w.print(",\"model_version\":\"", .{});
+            try writeJsonEscaped(w, mv);
+            try w.print("\"", .{});
         }
 
         try w.print(",\"changed_files\":[", .{});
         for (m.changed_files, 0..) |f, fi| {
             if (fi > 0) try w.print(",", .{});
-            try w.print("\"{s}\"", .{jsonEscape(f)});
+            try w.print("\"", .{});
+            try writeJsonEscaped(w, f);
+            try w.print("\"", .{});
         }
         try w.print("]}}", .{});
     }
@@ -189,10 +201,22 @@ fn renderJson(
     try w.print("]}}\n", .{});
 }
 
-/// Simple JSON string escaping — returns as-is for CLI output.
-/// Strings from git/db rarely contain special JSON chars.
-fn jsonEscape(s: []const u8) []const u8 {
-    return s;
+/// Write a JSON-escaped version of `s` to `writer`.
+/// Escapes: \, ", control chars (as \uXXXX), newlines, tabs.
+fn writeJsonEscaped(writer: *std.Io.Writer, s: []const u8) !void {
+    for (s) |c| {
+        switch (c) {
+            '"' => try writer.print("\\\"", .{}),
+            '\\' => try writer.print("\\\\", .{}),
+            '\n' => try writer.print("\\n", .{}),
+            '\r' => try writer.print("\\r", .{}),
+            '\t' => try writer.print("\\t", .{}),
+            0x00...0x08, 0x0B, 0x0C, 0x0E...0x1F => {
+                try writer.print("\\u{x:0>4}", .{@as(u16, c)});
+            },
+            else => try writer.print("{c}", .{c}),
+        }
+    }
 }
 
 var duration_buf: [32]u8 = undefined;

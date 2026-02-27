@@ -133,7 +133,7 @@ test "ulid encode/decode roundtrip" {
 }
 
 test "ulid timestamp extraction" {
-    const id = Ulid.fromParts(1700000000000, undefined);
+    const id = Ulid.fromParts(1700000000000, null);
     // Timestamp is preserved even though random part differs
     try std.testing.expectEqual(@as(u48, 1700000000000), id.timestamp());
 }

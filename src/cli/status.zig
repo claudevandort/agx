@@ -1,28 +1,11 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const agx = @import("agx");
+const CliContext = @import("cli_common.zig").CliContext;
 
 pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !void {
-    const git = agx.GitCli.init(alloc, null);
-
-    const git_dir = git.gitDir() catch {
-        try stderr.print("error: not a git repository\n", .{});
-        try stderr.flush();
-        std.process.exit(1);
-    };
-    defer alloc.free(git_dir);
-
-    const db_path = try std.fmt.allocPrintSentinel(alloc, "{s}/agx/db.sqlite3", .{git_dir}, 0);
-    defer alloc.free(db_path);
-
-    std.fs.cwd().access(db_path[0..db_path.len :0], .{}) catch {
-        try stderr.print("error: agx not initialized. Run 'agx init' first.\n", .{});
-        try stderr.flush();
-        std.process.exit(1);
-    };
-
-    var store = try agx.Store.init(alloc, db_path);
-    defer store.deinit();
+    var ctx = CliContext.open(alloc, stderr);
+    defer ctx.deinit();
 
     // Check if --task <id> was given
     var task_filter: ?[]const u8 = null;
@@ -36,10 +19,10 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
 
     if (task_filter) |filter| {
         // Show single task detail
-        try showTaskByFilter(&store, alloc, filter, stdout, stderr);
+        try showTaskByFilter(&ctx.store, alloc, filter, stdout, stderr);
     } else {
         // Show all active tasks
-        try showAllTasks(&store, alloc, stdout);
+        try showAllTasks(&ctx.store, alloc, stdout);
     }
 
     try stdout.flush();
@@ -135,12 +118,7 @@ fn showTaskByFilter(store: *agx.Store, alloc: Allocator, filter: []const u8, std
 fn showExplorations(store: *agx.Store, alloc: Allocator, task_id: agx.Ulid, stdout: *std.Io.Writer) !void {
     var buf: [32]agx.Exploration = undefined;
     const exps = try store.getExplorationsByTask(task_id, &buf);
-    defer for (exps) |exp| {
-        alloc.free(exp.worktree_path);
-        alloc.free(exp.branch_name);
-        if (exp.approach) |a| alloc.free(a);
-        if (exp.summary) |s| alloc.free(s);
-    };
+    defer agx.Exploration.deinitSlice(alloc, exps);
 
     for (exps) |exp| {
         const status_icon: []const u8 = switch (exp.status) {

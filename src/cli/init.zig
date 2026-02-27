@@ -3,8 +3,6 @@ const Allocator = std.mem.Allocator;
 const agx = @import("agx");
 
 pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !void {
-    _ = stderr;
-
     var shared = false;
     for (args) |arg| {
         if (std.mem.eql(u8, arg, "--shared")) {
@@ -15,8 +13,8 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     // Verify we're in a git repo
     const git = agx.GitCli.init(alloc, null);
     const git_dir = git.gitDir() catch {
-        try stdout.print("error: not a git repository\n", .{});
-        try stdout.flush();
+        try stderr.print("error: not a git repository\n", .{});
+        try stderr.flush();
         std.process.exit(1);
     };
     defer alloc.free(git_dir);
@@ -36,8 +34,8 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         const full = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ git_dir, sub });
         defer alloc.free(full);
         std.fs.cwd().makePath(full) catch |err| {
-            try stdout.print("error: could not create {s}: {s}\n", .{ full, @errorName(err) });
-            try stdout.flush();
+            try stderr.print("error: could not create {s}: {s}\n", .{ full, @errorName(err) });
+            try stderr.flush();
             std.process.exit(1);
         };
     }

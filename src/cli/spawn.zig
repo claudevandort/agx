@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const agx = @import("agx");
 const Ulid = agx.Ulid;
+const CliContext = @import("cli_common.zig").CliContext;
 
 pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !void {
     // Parse arguments
@@ -49,37 +50,17 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         std.process.exit(1);
     }
 
-    const git = agx.GitCli.init(alloc, null);
-
-    // Verify agx is initialized
-    const git_dir = git.gitDir() catch {
-        try stderr.print("error: not a git repository\n", .{});
-        try stderr.flush();
-        std.process.exit(1);
-    };
-    defer alloc.free(git_dir);
-
-    const db_path = try std.fmt.allocPrintSentinel(alloc, "{s}/agx/db.sqlite3", .{git_dir}, 0);
-    defer alloc.free(db_path);
-
-    // Check db exists
-    std.fs.cwd().access(db_path[0 .. db_path.len :0], .{}) catch {
-        try stderr.print("error: agx not initialized. Run 'agx init' first.\n", .{});
-        try stderr.flush();
-        std.process.exit(1);
-    };
-
-    var store = try agx.Store.init(alloc, db_path);
-    defer store.deinit();
+    var ctx = CliContext.open(alloc, stderr);
+    defer ctx.deinit();
 
     // Resolve base commit
     const base_commit = if (base_ref) |ref|
-        try git.resolveRef(ref)
+        try ctx.git.resolveRef(ref)
     else
-        try git.headCommit();
+        try ctx.git.headCommit();
     defer alloc.free(base_commit);
 
-    const base_branch = git.currentBranch() catch try alloc.dupe(u8, "HEAD");
+    const base_branch = ctx.git.currentBranch() catch try alloc.dupe(u8, "HEAD");
     defer alloc.free(base_branch);
 
     // Create task
@@ -87,7 +68,7 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     const task_id = Ulid.new();
     const task_short = task_id.short(6);
 
-    try store.insertTask(.{
+    try ctx.store.insertTask(.{
         .id = task_id,
         .description = task_desc.?,
         .base_commit = base_commit,
@@ -103,7 +84,7 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     try stdout.print("\n", .{});
 
     // Create explorations with worktrees
-    const worktree_base = try std.fmt.allocPrint(alloc, "{s}/agx/worktrees/{s}", .{ git_dir, &task_short });
+    const worktree_base = try std.fmt.allocPrint(alloc, "{s}/agx/worktrees/{s}", .{ ctx.git_dir, &task_short });
     defer alloc.free(worktree_base);
     std.fs.cwd().makePath(worktree_base) catch {};
 
@@ -116,13 +97,13 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         defer alloc.free(worktree_path);
 
         // Create worktree (also creates branch)
-        git.addWorktree(worktree_path, branch_name) catch |err| {
+        ctx.git.addWorktree(worktree_path, branch_name) catch |err| {
             try stderr.print("error: could not create worktree {d}: {s}\n", .{ idx, @errorName(err) });
             try stderr.flush();
             std.process.exit(1);
         };
 
-        try store.insertExploration(.{
+        try ctx.store.insertExploration(.{
             .id = exp_id,
             .task_id = task_id,
             .index = idx,
@@ -137,7 +118,7 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
 
         // Create a session for this exploration
         const session_id = Ulid.new();
-        try store.insertSession(.{
+        try ctx.store.insertSession(.{
             .id = session_id,
             .exploration_id = exp_id,
             .agent_type = null,

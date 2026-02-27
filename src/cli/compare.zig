@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const agx = @import("agx");
+const CliContext = @import("cli_common.zig").CliContext;
 
 pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !void {
     var format_str: ?[]const u8 = null;
@@ -24,37 +25,20 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         }
     }
 
-    const git = agx.GitCli.init(alloc, null);
-    const git_dir = git.gitDir() catch {
-        try stderr.print("error: not a git repository\n", .{});
-        try stderr.flush();
-        std.process.exit(1);
-    };
-    defer alloc.free(git_dir);
-
-    const db_path = try std.fmt.allocPrintSentinel(alloc, "{s}/agx/db.sqlite3", .{git_dir}, 0);
-    defer alloc.free(db_path);
-
-    std.fs.cwd().access(db_path[0..db_path.len :0], .{}) catch {
-        try stderr.print("error: agx not initialized. Run 'agx init' first.\n", .{});
-        try stderr.flush();
-        std.process.exit(1);
-    };
-
-    var store = try agx.Store.init(alloc, db_path);
-    defer store.deinit();
+    var ctx = CliContext.open(alloc, stderr);
+    defer ctx.deinit();
 
     // Find the task
     const task = blk: {
         if (task_filter) |filter| {
-            break :blk findTaskByFilter(&store, filter) catch {
+            break :blk findTaskByFilter(&ctx.store, filter) catch {
                 try stderr.print("error: no task matching '{s}'\n", .{filter});
                 try stderr.flush();
                 std.process.exit(1);
                 unreachable;
             };
         } else {
-            break :blk store.getActiveTask() catch {
+            break :blk ctx.store.getActiveTask() catch {
                 try stderr.print("error: no active task found\n", .{});
                 try stderr.print("hint: use --task <id> to specify a task\n", .{});
                 try stderr.flush();
@@ -63,21 +47,12 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
             };
         }
     };
-    defer {
-        alloc.free(task.description);
-        alloc.free(task.base_commit);
-        alloc.free(task.base_branch);
-    }
+    defer task.deinit(alloc);
 
     // Get explorations
     var exp_buf: [32]agx.Exploration = undefined;
-    const explorations = try store.getExplorationsByTask(task.id, &exp_buf);
-    defer for (explorations) |exp| {
-        alloc.free(exp.worktree_path);
-        alloc.free(exp.branch_name);
-        if (exp.approach) |a| alloc.free(a);
-        if (exp.summary) |s| alloc.free(s);
-    };
+    const explorations = try ctx.store.getExplorationsByTask(task.id, &exp_buf);
+    defer agx.Exploration.deinitSlice(alloc, explorations);
 
     if (explorations.len == 0) {
         try stderr.print("error: no explorations found for this task\n", .{});
@@ -87,7 +62,7 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
 
     // Handle --diff mode (three-way diff between two explorations)
     if (diff_a != null and diff_b != null) {
-        try runDiff(alloc, &store, &task, explorations, diff_a.?, diff_b.?, stdout, stderr);
+        try runDiff(alloc, &ctx.store, &task, explorations, diff_a.?, diff_b.?, stdout, stderr);
         return;
     } else if (diff_a != null or diff_b != null) {
         try stderr.print("error: --diff requires two exploration indices (e.g., --diff 1 2)\n", .{});
@@ -96,7 +71,7 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     }
 
     // Collect metrics
-    const metrics = agx.compare_metrics.collectMetrics(alloc, &store, &task, explorations) catch |err| {
+    const metrics = agx.compare_metrics.collectMetrics(alloc, &ctx.store, &task, explorations) catch |err| {
         try stderr.print("error: failed to collect metrics: {s}\n", .{@errorName(err)});
         try stderr.flush();
         std.process.exit(1);
