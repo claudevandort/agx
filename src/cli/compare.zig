@@ -25,7 +25,11 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         }
     }
 
-    var ctx = CliContext.open(alloc, stderr);
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    var ctx = CliContext.open(aa, stderr);
     defer ctx.deinit();
 
     // Find the task
@@ -47,12 +51,10 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
             };
         }
     };
-    defer task.deinit(alloc);
 
     // Get explorations
     var exp_buf: [32]agx.Exploration = undefined;
     const explorations = try ctx.store.getExplorationsByTask(task.id, &exp_buf);
-    defer agx.Exploration.deinitSlice(alloc, explorations);
 
     if (explorations.len == 0) {
         try stderr.print("error: no explorations found for this task\n", .{});
@@ -71,16 +73,12 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     }
 
     // Collect metrics
-    const metrics = agx.compare_metrics.collectMetrics(alloc, &ctx.store, &task, explorations) catch |err| {
+    const metrics = agx.compare_metrics.collectMetrics(aa, &ctx.store, &task, explorations) catch |err| {
         try stderr.print("error: failed to collect metrics: {s}\n", .{@errorName(err)});
         try stderr.flush();
         std.process.exit(1);
         unreachable;
     };
-    defer {
-        for (metrics) |*m| m.deinit(alloc);
-        alloc.free(metrics);
-    }
 
     // Render
     const format = if (format_str) |fs|
@@ -93,7 +91,7 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     else
         .table;
 
-    try agx.compare_renderer.render(alloc, stdout, metrics, format, task.description);
+    try agx.compare_renderer.render(aa, stdout, metrics, format, task.description);
     try stdout.flush();
 }
 
@@ -153,7 +151,6 @@ fn runDiff(
         std.process.exit(1);
         unreachable;
     };
-    defer alloc.free(diff_output);
 
     if (diff_output.len == 0) {
         try stdout.print("No differences between exploration [{d}] and [{d}]\n", .{ idx_a, idx_b });

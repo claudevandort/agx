@@ -7,24 +7,7 @@ const Session = @import("../core/session.zig").Session;
 const Event = @import("../core/event.zig").Event;
 const Evidence = @import("../core/evidence.zig").Evidence;
 const Store = @import("store.zig").Store;
-
-/// Write a JSON-escaped version of `s` to `writer`.
-/// Escapes: \, ", control chars (as \uXXXX), newlines, tabs.
-fn writeJsonEscaped(writer: *std.Io.Writer, s: []const u8) !void {
-    for (s) |c| {
-        switch (c) {
-            '"' => try writer.print("\\\"", .{}),
-            '\\' => try writer.print("\\\\", .{}),
-            '\n' => try writer.print("\\n", .{}),
-            '\r' => try writer.print("\\r", .{}),
-            '\t' => try writer.print("\\t", .{}),
-            0x00...0x08, 0x0B, 0x0C, 0x0E...0x1F => {
-                try writer.print("\\u{x:0>4}", .{@as(u16, c)});
-            },
-            else => try writer.print("{c}", .{c}),
-        }
-    }
-}
+const JsonWriter = @import("../util/json_writer.zig").JsonWriter;
 
 /// Export all context for a task to .agx/context/{task_id}/.
 /// Produces: summary.md, sessions.jsonl, evidence.json, decision_log.md
@@ -36,14 +19,12 @@ pub fn exportTaskContext(
 ) ![]const u8 {
     const task_id_str = task.id.encode();
     const context_dir = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ context_base, &task_id_str });
-    errdefer alloc.free(context_dir);
 
     std.fs.cwd().makePath(context_dir) catch {};
 
     // Get all explorations for this task
     var exp_buf: [32]Exploration = undefined;
     const explorations = try store.getExplorationsByTask(task.id, &exp_buf);
-    defer Exploration.deinitSlice(alloc, explorations);
 
     try writeSummary(alloc, task, explorations, context_dir);
     try writeSessionsJsonl(alloc, store, explorations, context_dir);
@@ -63,7 +44,6 @@ pub fn exportExplorationContext(
 ) ![]const u8 {
     const task_id_str = task.id.encode();
     const context_dir = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ context_base, &task_id_str });
-    errdefer alloc.free(context_dir);
 
     std.fs.cwd().makePath(context_dir) catch {};
 
@@ -85,7 +65,6 @@ fn writeSummary(
     context_dir: []const u8,
 ) !void {
     const path = try std.fmt.allocPrint(alloc, "{s}/summary.md", .{context_dir});
-    defer alloc.free(path);
 
     const file = std.fs.cwd().createFile(path, .{}) catch return;
     defer file.close();
@@ -132,7 +111,6 @@ fn writeSessionsJsonl(
     context_dir: []const u8,
 ) !void {
     const path = try std.fmt.allocPrint(alloc, "{s}/sessions.jsonl", .{context_dir});
-    defer alloc.free(path);
 
     const file = std.fs.cwd().createFile(path, .{}) catch return;
     defer file.close();
@@ -144,38 +122,35 @@ fn writeSessionsJsonl(
     for (explorations) |exp| {
         var sess_buf: [8]Session = undefined;
         const sessions = store.getSessionsByExploration(exp.id, &sess_buf) catch continue;
-        defer Session.deinitSlice(alloc, sessions);
 
         for (sessions) |sess| {
-            // Write session header
             const sess_id_str = sess.id.encode();
-            try w.print("{{\"type\":\"session\",\"id\":\"{s}\",\"exploration_index\":{d}", .{ &sess_id_str, exp.index });
-            if (sess.agent_type) |at| {
-                try w.print(",\"agent_type\":\"", .{});
-                try writeJsonEscaped(w, at);
-                try w.print("\"", .{});
-            }
-            if (sess.model_version) |mv| {
-                try w.print(",\"model_version\":\"", .{});
-                try writeJsonEscaped(w, mv);
-                try w.print("\"", .{});
-            }
-            try w.print(",\"started_at\":{d}", .{sess.started_at});
-            if (sess.ended_at) |ea| try w.print(",\"ended_at\":{d}", .{ea});
-            if (sess.exit_reason) |er| try w.print(",\"exit_reason\":\"{s}\"", .{er.toStr()});
-            try w.print("}}\n", .{});
+            var jw = JsonWriter.init(w);
+            try jw.beginObject();
+            try jw.stringField("type", "session");
+            try jw.stringField("id", &sess_id_str);
+            try jw.uintField("exploration_index", exp.index);
+            try jw.optionalStringField("agent_type", sess.agent_type);
+            try jw.optionalStringField("model_version", sess.model_version);
+            try jw.intField("started_at", sess.started_at);
+            try jw.optionalIntField("ended_at", sess.ended_at);
+            if (sess.exit_reason) |er| try jw.stringField("exit_reason", er.toStr());
+            try jw.endObject();
+            try w.print("\n", .{});
 
             // Write events for this session
             var ev_buf: [512]Event = undefined;
             const events = store.getEventsBySession(sess.id, null, &ev_buf) catch continue;
-            defer Event.deinitSlice(alloc, events);
 
             for (events) |ev| {
-                try w.print("{{\"type\":\"event\",\"kind\":\"{s}\",\"created_at\":{d}", .{ ev.kind.toStr(), ev.created_at });
-                if (ev.data) |d| {
-                    try w.print(",\"data\":{s}", .{d});
-                }
-                try w.print("}}\n", .{});
+                var ejw = JsonWriter.init(w);
+                try ejw.beginObject();
+                try ejw.stringField("type", "event");
+                try ejw.stringField("kind", ev.kind.toStr());
+                try ejw.intField("created_at", ev.created_at);
+                if (ev.data) |d| try ejw.rawField("data", d);
+                try ejw.endObject();
+                try w.print("\n", .{});
             }
 
             try w.flush();
@@ -192,7 +167,6 @@ fn writeEvidenceJson(
     context_dir: []const u8,
 ) !void {
     const path = try std.fmt.allocPrint(alloc, "{s}/evidence.json", .{context_dir});
-    defer alloc.free(path);
 
     const file = std.fs.cwd().createFile(path, .{}) catch return;
     defer file.close();
@@ -200,43 +174,29 @@ fn writeEvidenceJson(
     var buf: [4096]u8 = undefined;
     var fw = file.writer(&buf);
     const w = &fw.interface;
+    var jw = JsonWriter.init(w);
 
-    try w.print("[", .{});
-    var first = true;
+    try jw.beginArray();
 
     for (explorations) |exp| {
         var ev_buf: [64]Evidence = undefined;
         const evidence = store.getEvidenceByExploration(exp.id, &ev_buf) catch continue;
-        defer Evidence.deinitSlice(alloc, evidence);
 
         for (evidence) |ev| {
-            if (!first) try w.print(",", .{});
-            first = false;
-            try w.print("\n  {{\"exploration_index\":{d},\"kind\":\"{s}\",\"status\":\"{s}\"", .{
-                exp.index,
-                ev.kind.toStr(),
-                ev.status.toStr(),
-            });
-            if (ev.hash) |h| {
-                try w.print(",\"hash\":\"", .{});
-                try writeJsonEscaped(w, h);
-                try w.print("\"", .{});
-            }
-            if (ev.summary) |s| {
-                try w.print(",\"summary\":\"", .{});
-                try writeJsonEscaped(w, s);
-                try w.print("\"", .{});
-            }
-            if (ev.raw_path) |p| {
-                try w.print(",\"raw_path\":\"", .{});
-                try writeJsonEscaped(w, p);
-                try w.print("\"", .{});
-            }
-            try w.print(",\"recorded_at\":{d}}}", .{ev.recorded_at});
+            try jw.beginObjectValue();
+            try jw.uintField("exploration_index", exp.index);
+            try jw.stringField("kind", ev.kind.toStr());
+            try jw.stringField("status", ev.status.toStr());
+            try jw.optionalStringField("hash", ev.hash);
+            try jw.optionalStringField("summary", ev.summary);
+            try jw.optionalStringField("raw_path", ev.raw_path);
+            try jw.intField("recorded_at", ev.recorded_at);
+            try jw.endObject();
         }
     }
 
-    try w.print("\n]\n", .{});
+    try jw.endArray();
+    try w.print("\n", .{});
     try w.flush();
 }
 
@@ -249,7 +209,6 @@ fn writeDecisionLog(
     context_dir: []const u8,
 ) !void {
     const path = try std.fmt.allocPrint(alloc, "{s}/decision_log.md", .{context_dir});
-    defer alloc.free(path);
 
     const file = std.fs.cwd().createFile(path, .{}) catch return;
     defer file.close();
@@ -265,13 +224,11 @@ fn writeDecisionLog(
     for (explorations) |exp| {
         var sess_buf: [8]Session = undefined;
         const sessions = store.getSessionsByExploration(exp.id, &sess_buf) catch continue;
-        defer Session.deinitSlice(alloc, sessions);
 
         var header_written = false;
         for (sessions) |sess| {
             var ev_buf: [256]Event = undefined;
             const events = store.getEventsBySession(sess.id, "decision", &ev_buf) catch continue;
-            defer Event.deinitSlice(alloc, events);
 
             for (events) |ev| {
                 if (!header_written) {

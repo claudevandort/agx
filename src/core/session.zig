@@ -1,5 +1,4 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const Ulid = @import("ulid.zig").Ulid;
 
 pub const ExitReason = enum {
@@ -31,14 +30,4 @@ pub const Session = struct {
     started_at: i64,
     ended_at: ?i64,
 
-    pub fn deinit(self: *const Session, alloc: Allocator) void {
-        if (self.agent_type) |a| alloc.free(a);
-        if (self.model_version) |m| alloc.free(m);
-        if (self.environment_fingerprint) |e| alloc.free(e);
-        if (self.initial_prompt) |p| alloc.free(p);
-    }
-
-    pub fn deinitSlice(alloc: Allocator, slice: []const Session) void {
-        for (slice) |*s| s.deinit(alloc);
-    }
 };

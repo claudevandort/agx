@@ -7,24 +7,12 @@ pub const SessionInfo = struct {
     session_id_str: []u8,
     task_id_str: []u8,
     index: u32,
-
-    pub fn deinit(self: *const SessionInfo, alloc: Allocator) void {
-        alloc.free(self.exploration_id_str);
-        alloc.free(self.session_id_str);
-        alloc.free(self.task_id_str);
-    }
 };
 
 pub const WorktreeContext = struct {
     info: SessionInfo,
     db_path: [:0]u8,
     common_dir: []u8,
-
-    pub fn deinit(self: *const WorktreeContext, alloc: Allocator) void {
-        self.info.deinit(alloc);
-        alloc.free(self.db_path);
-        alloc.free(self.common_dir);
-    }
 };
 
 /// Detect the current worktree context: read .agx-session, find the store.
@@ -36,7 +24,6 @@ pub fn getWorktreeContext(alloc: Allocator, stderr: *std.Io.Writer) !WorktreeCon
         try stderr.flush();
         return error.NotInWorktree;
     };
-    errdefer info.deinit(alloc);
 
     const git = agx.GitCli.init(alloc, null);
 
@@ -45,10 +32,8 @@ pub fn getWorktreeContext(alloc: Allocator, stderr: *std.Io.Writer) !WorktreeCon
         try stderr.flush();
         return error.GitError;
     };
-    errdefer alloc.free(common_dir);
 
     const db_path = try std.fmt.allocPrintSentinel(alloc, "{s}/agx/db.sqlite3", .{common_dir}, 0);
-    errdefer alloc.free(db_path);
 
     return .{
         .info = info,

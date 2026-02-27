@@ -50,7 +50,11 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         std.process.exit(1);
     }
 
-    var ctx = CliContext.open(alloc, stderr);
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    var ctx = CliContext.open(aa, stderr);
     defer ctx.deinit();
 
     // Resolve base commit
@@ -58,10 +62,8 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         try ctx.git.resolveRef(ref)
     else
         try ctx.git.headCommit();
-    defer alloc.free(base_commit);
 
-    const base_branch = ctx.git.currentBranch() catch try alloc.dupe(u8, "HEAD");
-    defer alloc.free(base_branch);
+    const base_branch = ctx.git.currentBranch() catch try aa.dupe(u8, "HEAD");
 
     // Create task
     const now = std.time.milliTimestamp();
@@ -84,17 +86,14 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     try stdout.print("\n", .{});
 
     // Create explorations with worktrees
-    const worktree_base = try std.fmt.allocPrint(alloc, "{s}/agx/worktrees/{s}", .{ ctx.git_dir, &task_short });
-    defer alloc.free(worktree_base);
+    const worktree_base = try std.fmt.allocPrint(aa, "{s}/agx/worktrees/{s}", .{ ctx.git_dir, &task_short });
     std.fs.cwd().makePath(worktree_base) catch {};
 
     var idx: u32 = 1;
     while (idx <= count) : (idx += 1) {
         const exp_id = Ulid.new();
-        const branch_name = try std.fmt.allocPrint(alloc, "agx/{s}/{d}", .{ &task_short, idx });
-        defer alloc.free(branch_name);
-        const worktree_path = try std.fmt.allocPrint(alloc, "{s}/{d}", .{ worktree_base, idx });
-        defer alloc.free(worktree_path);
+        const branch_name = try std.fmt.allocPrint(aa, "agx/{s}/{d}", .{ &task_short, idx });
+        const worktree_path = try std.fmt.allocPrint(aa, "{s}/{d}", .{ worktree_base, idx });
 
         // Create worktree (also creates branch)
         ctx.git.addWorktree(worktree_path, branch_name) catch |err| {
@@ -131,8 +130,7 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         });
 
         // Write .agx-session discovery file in worktree
-        const session_file_path = try std.fmt.allocPrint(alloc, "{s}/.agx-session", .{worktree_path});
-        defer alloc.free(session_file_path);
+        const session_file_path = try std.fmt.allocPrint(aa, "{s}/.agx-session", .{worktree_path});
 
         const session_id_str = session_id.encode();
         const exp_id_str = exp_id.encode();

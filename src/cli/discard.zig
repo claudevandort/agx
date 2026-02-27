@@ -26,7 +26,11 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         std.process.exit(1);
     };
 
-    var ctx = CliContext.open(alloc, stderr);
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    var ctx = CliContext.open(aa, stderr);
     defer ctx.deinit();
 
     const task = ctx.store.getActiveTask() catch {
@@ -35,7 +39,6 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         std.process.exit(1);
         unreachable;
     };
-    defer task.deinit(alloc);
 
     const exp = ctx.store.getExplorationByIndex(task.id, index) catch {
         try stderr.print("error: exploration [{d}] not found\n", .{index});
@@ -43,7 +46,6 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         std.process.exit(1);
         unreachable;
     };
-    defer exp.deinit(alloc);
 
     if (exp.status == .kept) {
         try stderr.print("error: exploration [{d}] is already kept — cannot discard\n", .{index});

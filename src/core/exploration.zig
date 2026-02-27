@@ -1,5 +1,4 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const Ulid = @import("ulid.zig").Ulid;
 
 pub const ExplorationStatus = enum {
@@ -32,15 +31,4 @@ pub const Exploration = struct {
     summary: ?[]const u8, // outcome description set via `agx done`
     created_at: i64,
     updated_at: i64,
-
-    pub fn deinit(self: *const Exploration, alloc: Allocator) void {
-        alloc.free(self.worktree_path);
-        alloc.free(self.branch_name);
-        if (self.approach) |a| alloc.free(a);
-        if (self.summary) |s| alloc.free(s);
-    }
-
-    pub fn deinitSlice(alloc: Allocator, slice: []const Exploration) void {
-        for (slice) |*e| e.deinit(alloc);
-    }
 };

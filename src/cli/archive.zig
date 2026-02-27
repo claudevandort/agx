@@ -23,7 +23,11 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         std.process.exit(1);
     }
 
-    var ctx = CliContext.open(alloc, stderr);
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    var ctx = CliContext.open(aa, stderr);
     defer ctx.deinit();
 
     const task = ctx.store.getActiveTask() catch {
@@ -32,17 +36,15 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         std.process.exit(1);
         unreachable;
     };
-    defer task.deinit(alloc);
 
     if (archive_all) {
         var exp_buf: [32]agx.Exploration = undefined;
         const exps = try ctx.store.getExplorationsByTask(task.id, &exp_buf);
-        defer agx.Exploration.deinitSlice(alloc, exps);
 
         var archived: u32 = 0;
         for (exps) |e| {
             if (e.status == .kept or e.status == .archived or e.status == .discarded) continue;
-            archiveOne(alloc, &ctx.store, &ctx.git, &task, &e, stdout, stderr) catch continue;
+            archiveOne(aa, &ctx.store, &ctx.git, &task, &e, stdout, stderr) catch continue;
             archived += 1;
         }
         try stdout.print("{d} exploration(s) archived.\n", .{archived});
@@ -59,7 +61,6 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
             std.process.exit(1);
             unreachable;
         };
-        defer exp.deinit(alloc);
 
         if (exp.status == .kept) {
             try stderr.print("error: exploration [{d}] is already kept\n", .{index});
@@ -67,7 +68,7 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
             std.process.exit(1);
         }
 
-        try archiveOne(alloc, &ctx.store, &ctx.git, &task, &exp, stdout, stderr);
+        try archiveOne(aa, &ctx.store, &ctx.git, &task, &exp, stdout, stderr);
     }
 
     try stdout.flush();
@@ -95,7 +96,6 @@ fn archiveOne(
         try stdout.print("warning: could not export context for [{d}]: {s}\n", .{ exp.index, @errorName(err) });
         return;
     };
-    defer alloc.free(context_dir);
 
     // Remove worktree but keep branch (as orphan ref for future reference)
     git.removeWorktree(exp.worktree_path) catch {};

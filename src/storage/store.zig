@@ -25,6 +25,13 @@ pub const Store = struct {
     db: sqlite.Db,
     alloc: Allocator,
 
+    // Cached prepared statements for hot-path queries
+    cached_insert_event: ?sqlite.Stmt = null,
+    cached_exps_by_task: ?sqlite.Stmt = null,
+    cached_sessions_by_exp: ?sqlite.Stmt = null,
+    cached_events_by_session: ?sqlite.Stmt = null,
+    cached_evidence_by_exp: ?sqlite.Stmt = null,
+
     pub fn init(alloc: Allocator, path: [*:0]const u8) StoreError!Store {
         var db = try sqlite.Db.open(path);
 
@@ -39,7 +46,21 @@ pub const Store = struct {
     }
 
     pub fn deinit(self: *Store) void {
+        if (self.cached_insert_event) |*s| s.finalize();
+        if (self.cached_exps_by_task) |*s| s.finalize();
+        if (self.cached_sessions_by_exp) |*s| s.finalize();
+        if (self.cached_events_by_session) |*s| s.finalize();
+        if (self.cached_evidence_by_exp) |*s| s.finalize();
         self.db.close();
+    }
+
+    fn getCached(self: *Store, field: *?sqlite.Stmt, sql: [*:0]const u8) StoreError!*sqlite.Stmt {
+        if (field.*) |*s| {
+            s.reset();
+            return s;
+        }
+        field.* = try self.db.prepare(sql);
+        return &field.*.?;
     }
 
     fn migrate(self: *Store) StoreError!void {
@@ -141,20 +162,11 @@ pub const Store = struct {
 
     fn readTask(self: *Store, stmt: *sqlite.Stmt) StoreError!Task {
         const resolved_blob = stmt.columnBlob(5);
-
-        const description = try self.dupeText(stmt.columnText(1));
-        errdefer self.alloc.free(description);
-
-        const base_commit = try self.dupeText(stmt.columnText(2));
-        errdefer self.alloc.free(base_commit);
-
-        const base_branch = try self.dupeText(stmt.columnText(3));
-
         return .{
             .id = readUlid(stmt, 0),
-            .description = description,
-            .base_commit = base_commit,
-            .base_branch = base_branch,
+            .description = try self.dupeText(stmt.columnText(1)),
+            .base_commit = try self.dupeText(stmt.columnText(2)),
+            .base_branch = try self.dupeText(stmt.columnText(3)),
             .status = TaskStatus.fromStr(stmt.columnText(4) orelse "active") catch .active,
             .resolved_exploration_id = if (resolved_blob) |b| blk: {
                 break :blk if (b.len >= 16) Ulid{ .bytes = b[0..16].* } else null;
@@ -185,22 +197,20 @@ pub const Store = struct {
     }
 
     pub fn getExplorationsByTask(self: *Store, task_id: Ulid, buf: []Exploration) StoreError![]Exploration {
-        var stmt = try self.db.prepare(
+        const stmt = try self.getCached(
+            &self.cached_exps_by_task,
             "SELECT id, task_id, idx, worktree_path, branch_name, status, approach, summary, created_at, updated_at FROM explorations WHERE task_id = ?1 ORDER BY idx",
         );
-        defer stmt.finalize();
         try stmt.bindBlob(1, &task_id.bytes);
 
         var count: usize = 0;
-        errdefer Exploration.deinitSlice(self.alloc, buf[0..count]);
         while (count < buf.len) {
             const result = try stmt.step();
             if (result != .row) break;
-            buf[count] = try self.readExploration(&stmt);
+            buf[count] = try self.readExploration(stmt);
             count += 1;
         }
         if (count == buf.len) {
-            // Check if there are more rows we couldn't fit
             const extra = try stmt.step();
             if (extra == .row) {
                 std.log.warn("getExplorationsByTask: buffer full ({d}), results truncated", .{buf.len});
@@ -245,26 +255,15 @@ pub const Store = struct {
     }
 
     fn readExploration(self: *Store, stmt: *sqlite.Stmt) StoreError!Exploration {
-        const worktree_path = try self.dupeText(stmt.columnText(3));
-        errdefer self.alloc.free(worktree_path);
-
-        const branch_name = try self.dupeText(stmt.columnText(4));
-        errdefer self.alloc.free(branch_name);
-
-        const approach = try self.dupeOptionalText(stmt.columnText(6));
-        errdefer if (approach) |a| self.alloc.free(a);
-
-        const summary = try self.dupeOptionalText(stmt.columnText(7));
-
         return .{
             .id = readUlid(stmt, 0),
             .task_id = readUlid(stmt, 1),
             .index = @intCast(stmt.columnInt(2)),
-            .worktree_path = worktree_path,
-            .branch_name = branch_name,
+            .worktree_path = try self.dupeText(stmt.columnText(3)),
+            .branch_name = try self.dupeText(stmt.columnText(4)),
             .status = ExplorationStatus.fromStr(stmt.columnText(5) orelse "active") catch .active,
-            .approach = approach,
-            .summary = summary,
+            .approach = try self.dupeOptionalText(stmt.columnText(6)),
+            .summary = try self.dupeOptionalText(stmt.columnText(7)),
             .created_at = stmt.columnInt64(8),
             .updated_at = stmt.columnInt64(9),
         };
@@ -301,36 +300,23 @@ pub const Store = struct {
     }
 
     pub fn getSessionsByExploration(self: *Store, exploration_id: Ulid, buf: []Session) StoreError![]Session {
-        var stmt = try self.db.prepare(
+        const stmt = try self.getCached(
+            &self.cached_sessions_by_exp,
             "SELECT id, exploration_id, agent_type, model_version, environment_fingerprint, initial_prompt, exit_reason, started_at, ended_at FROM sessions WHERE exploration_id = ?1 ORDER BY started_at",
         );
-        defer stmt.finalize();
         try stmt.bindBlob(1, &exploration_id.bytes);
 
         var count: usize = 0;
-        errdefer Session.deinitSlice(self.alloc, buf[0..count]);
         while (count < buf.len) {
             const result = try stmt.step();
             if (result != .row) break;
-
-            const agent_type = try self.dupeOptionalText(stmt.columnText(2));
-            errdefer if (agent_type) |a| self.alloc.free(a);
-
-            const model_version = try self.dupeOptionalText(stmt.columnText(3));
-            errdefer if (model_version) |m| self.alloc.free(m);
-
-            const environment_fingerprint = try self.dupeOptionalText(stmt.columnText(4));
-            errdefer if (environment_fingerprint) |e| self.alloc.free(e);
-
-            const initial_prompt = try self.dupeOptionalText(stmt.columnText(5));
-
             buf[count] = .{
-                .id = readUlid(&stmt, 0),
-                .exploration_id = readUlid(&stmt, 1),
-                .agent_type = agent_type,
-                .model_version = model_version,
-                .environment_fingerprint = environment_fingerprint,
-                .initial_prompt = initial_prompt,
+                .id = readUlid(stmt, 0),
+                .exploration_id = readUlid(stmt, 1),
+                .agent_type = try self.dupeOptionalText(stmt.columnText(2)),
+                .model_version = try self.dupeOptionalText(stmt.columnText(3)),
+                .environment_fingerprint = try self.dupeOptionalText(stmt.columnText(4)),
+                .initial_prompt = try self.dupeOptionalText(stmt.columnText(5)),
                 .exit_reason = if (stmt.columnText(6)) |r| (ExitReason.fromStr(r) catch null) else null,
                 .started_at = stmt.columnInt64(7),
                 .ended_at = blk: {
@@ -352,10 +338,10 @@ pub const Store = struct {
     // ── Event CRUD ──
 
     pub fn insertEvent(self: *Store, event: Event) StoreError!void {
-        var stmt = try self.db.prepare(
+        const stmt = try self.getCached(
+            &self.cached_insert_event,
             "INSERT INTO events (id, session_id, kind, data, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
         );
-        defer stmt.finalize();
         try stmt.bindBlob(1, &event.id.bytes);
         try stmt.bindBlob(2, &event.session_id.bytes);
         try stmt.bindText(3, event.kind.toStr());
@@ -373,15 +359,19 @@ pub const Store = struct {
     }
 
     pub fn getEventsBySession(self: *Store, session_id: Ulid, kind_filter: ?[]const u8, buf: []Event) StoreError![]Event {
-        var stmt = if (kind_filter) |_|
-            try self.db.prepare(
+        // Filtered queries use uncached prepare/finalize; unfiltered uses cached stmt
+        var uncached_stmt: ?sqlite.Stmt = null;
+        defer if (uncached_stmt) |*s| s.finalize();
+
+        const stmt: *sqlite.Stmt = if (kind_filter) |_| blk: {
+            uncached_stmt = try self.db.prepare(
                 "SELECT id, session_id, kind, data, created_at FROM events WHERE session_id = ?1 AND kind = ?2 ORDER BY created_at LIMIT ?3",
-            )
-        else
-            try self.db.prepare(
-                "SELECT id, session_id, kind, data, created_at FROM events WHERE session_id = ?1 ORDER BY created_at LIMIT ?2",
             );
-        defer stmt.finalize();
+            break :blk &uncached_stmt.?;
+        } else try self.getCached(
+            &self.cached_events_by_session,
+            "SELECT id, session_id, kind, data, created_at FROM events WHERE session_id = ?1 ORDER BY created_at LIMIT ?2",
+        );
 
         try stmt.bindBlob(1, &session_id.bytes);
         if (kind_filter) |kf| {
@@ -392,13 +382,12 @@ pub const Store = struct {
         }
 
         var count: usize = 0;
-        errdefer Event.deinitSlice(self.alloc, buf[0..count]);
         while (count < buf.len) {
             const result = try stmt.step();
             if (result != .row) break;
             buf[count] = .{
-                .id = readUlid(&stmt, 0),
-                .session_id = readUlid(&stmt, 1),
+                .id = readUlid(stmt, 0),
+                .session_id = readUlid(stmt, 1),
                 .kind = EventKind.fromStr(stmt.columnText(2) orelse "custom") catch .custom,
                 .data = try self.dupeOptionalText(stmt.columnText(3)),
                 .created_at = stmt.columnInt64(4),
@@ -438,34 +427,24 @@ pub const Store = struct {
     }
 
     pub fn getEvidenceByExploration(self: *Store, exploration_id: Ulid, buf: []Evidence) StoreError![]Evidence {
-        var stmt = try self.db.prepare(
+        const stmt = try self.getCached(
+            &self.cached_evidence_by_exp,
             "SELECT id, exploration_id, kind, status, hash, summary, raw_path, recorded_at FROM evidence WHERE exploration_id = ?1 ORDER BY recorded_at",
         );
-        defer stmt.finalize();
         try stmt.bindBlob(1, &exploration_id.bytes);
 
         var count: usize = 0;
-        errdefer Evidence.deinitSlice(self.alloc, buf[0..count]);
         while (count < buf.len) {
             const result = try stmt.step();
             if (result != .row) break;
-
-            const hash = try self.dupeOptionalText(stmt.columnText(4));
-            errdefer if (hash) |h| self.alloc.free(h);
-
-            const summary = try self.dupeOptionalText(stmt.columnText(5));
-            errdefer if (summary) |s| self.alloc.free(s);
-
-            const raw_path = try self.dupeOptionalText(stmt.columnText(6));
-
             buf[count] = .{
-                .id = readUlid(&stmt, 0),
-                .exploration_id = readUlid(&stmt, 1),
+                .id = readUlid(stmt, 0),
+                .exploration_id = readUlid(stmt, 1),
                 .kind = EvidenceKind.fromStr(stmt.columnText(2) orelse "custom") catch .custom,
                 .status = EvidenceStatus.fromStr(stmt.columnText(3) orelse "error") catch .@"error",
-                .hash = hash,
-                .summary = summary,
-                .raw_path = raw_path,
+                .hash = try self.dupeOptionalText(stmt.columnText(4)),
+                .summary = try self.dupeOptionalText(stmt.columnText(5)),
+                .raw_path = try self.dupeOptionalText(stmt.columnText(6)),
                 .recorded_at = stmt.columnInt64(7),
             };
             count += 1;
@@ -488,7 +467,6 @@ pub const Store = struct {
         defer stmt.finalize();
 
         var count: usize = 0;
-        errdefer Task.deinitSlice(self.alloc, buf[0..count]);
         while (count < buf.len) {
             const result = try stmt.step();
             if (result != .row) break;
@@ -567,12 +545,16 @@ pub const Store = struct {
 // ── Tests ──
 
 test "store init and migrate" {
-    var store = try Store.init(std.testing.allocator, ":memory:");
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var store = try Store.init(arena.allocator(), ":memory:");
     defer store.deinit();
 }
 
 test "task roundtrip" {
-    var store = try Store.init(std.testing.allocator, ":memory:");
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var store = try Store.init(arena.allocator(), ":memory:");
     defer store.deinit();
 
     const now = std.time.milliTimestamp();
@@ -590,13 +572,14 @@ test "task roundtrip" {
     try store.insertTask(task);
 
     const got = try store.getTask(id);
-    defer got.deinit(std.testing.allocator);
     try std.testing.expectEqualSlices(u8, "refactor auth", got.description);
     try std.testing.expectEqual(TaskStatus.active, got.status);
 }
 
 test "exploration roundtrip" {
-    var store = try Store.init(std.testing.allocator, ":memory:");
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var store = try Store.init(arena.allocator(), ":memory:");
     defer store.deinit();
 
     const now = std.time.milliTimestamp();
@@ -628,13 +611,14 @@ test "exploration roundtrip" {
 
     var buf: [16]Exploration = undefined;
     const exps = try store.getExplorationsByTask(task_id, &buf);
-    defer Exploration.deinitSlice(std.testing.allocator, exps);
     try std.testing.expectEqual(@as(usize, 1), exps.len);
     try std.testing.expectEqualSlices(u8, "middleware extraction", exps[0].approach.?);
 }
 
 test "evidence roundtrip" {
-    var store = try Store.init(std.testing.allocator, ":memory:");
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var store = try Store.init(arena.allocator(), ":memory:");
     defer store.deinit();
 
     const now = std.time.milliTimestamp();
@@ -677,7 +661,6 @@ test "evidence roundtrip" {
 
     var buf: [16]Evidence = undefined;
     const evs = try store.getEvidenceByExploration(exp_id, &buf);
-    defer Evidence.deinitSlice(std.testing.allocator, evs);
     try std.testing.expectEqual(@as(usize, 1), evs.len);
     try std.testing.expectEqualSlices(u8, "47/47 tests passed", evs[0].summary.?);
 }

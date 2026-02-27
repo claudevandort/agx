@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const ExplorationMetrics = @import("metrics.zig").ExplorationMetrics;
+const JsonWriter = @import("../util/json_writer.zig").JsonWriter;
 
 pub const Format = enum {
     table,
@@ -154,72 +155,41 @@ fn renderJson(
     metrics: []const ExplorationMetrics,
     task_description: []const u8,
 ) !void {
-    try w.print("{{\"task\":\"", .{});
-    try writeJsonEscaped(w, task_description);
-    try w.print("\",\"explorations\":[", .{});
+    var jw = JsonWriter.init(w);
+    try jw.beginObject();
+    try jw.stringField("task", task_description);
+    try jw.arrayField("explorations");
 
-    for (metrics, 0..) |m, i| {
-        if (i > 0) try w.print(",", .{});
-        try w.print("{{\"index\":{d},\"status\":\"{s}\"", .{ m.index, m.status.toStr() });
-        try w.print(",\"files_changed\":{d},\"files_created\":{d},\"files_deleted\":{d}", .{ m.files_changed, m.files_created, m.files_deleted });
-        try w.print(",\"lines_added\":{d},\"lines_removed\":{d},\"commit_count\":{d}", .{ m.lines_added, m.lines_removed, m.commit_count });
-        try w.print(",\"tests_pass\":{d},\"tests_fail\":{d}", .{ m.tests_pass, m.tests_fail });
-        try w.print(",\"build_pass\":{s},\"build_fail\":{s}", .{
-            if (m.build_pass) "true" else "false",
-            if (m.build_fail) "true" else "false",
-        });
-        try w.print(",\"error_count\":{d}", .{m.error_count});
-
-        if (m.approach) |a| {
-            try w.print(",\"approach\":\"", .{});
-            try writeJsonEscaped(w, a);
-            try w.print("\"", .{});
+    for (metrics) |m| {
+        try jw.beginObjectValue();
+        try jw.uintField("index", m.index);
+        try jw.stringField("status", m.status.toStr());
+        try jw.uintField("files_changed", m.files_changed);
+        try jw.uintField("files_created", m.files_created);
+        try jw.uintField("files_deleted", m.files_deleted);
+        try jw.uintField("lines_added", m.lines_added);
+        try jw.uintField("lines_removed", m.lines_removed);
+        try jw.uintField("commit_count", m.commit_count);
+        try jw.uintField("tests_pass", m.tests_pass);
+        try jw.uintField("tests_fail", m.tests_fail);
+        try jw.boolField("build_pass", m.build_pass);
+        try jw.boolField("build_fail", m.build_fail);
+        try jw.uintField("error_count", m.error_count);
+        try jw.optionalStringField("approach", m.approach);
+        try jw.optionalStringField("summary", m.summary);
+        try jw.optionalStringField("agent_type", m.agent_type);
+        try jw.optionalStringField("model_version", m.model_version);
+        try jw.arrayField("changed_files");
+        for (m.changed_files) |f| {
+            try jw.stringValue(f);
         }
-        if (m.summary) |s| {
-            try w.print(",\"summary\":\"", .{});
-            try writeJsonEscaped(w, s);
-            try w.print("\"", .{});
-        }
-        if (m.agent_type) |a| {
-            try w.print(",\"agent_type\":\"", .{});
-            try writeJsonEscaped(w, a);
-            try w.print("\"", .{});
-        }
-        if (m.model_version) |mv| {
-            try w.print(",\"model_version\":\"", .{});
-            try writeJsonEscaped(w, mv);
-            try w.print("\"", .{});
-        }
-
-        try w.print(",\"changed_files\":[", .{});
-        for (m.changed_files, 0..) |f, fi| {
-            if (fi > 0) try w.print(",", .{});
-            try w.print("\"", .{});
-            try writeJsonEscaped(w, f);
-            try w.print("\"", .{});
-        }
-        try w.print("]}}", .{});
+        try jw.endArray();
+        try jw.endObject();
     }
 
-    try w.print("]}}\n", .{});
-}
-
-/// Write a JSON-escaped version of `s` to `writer`.
-/// Escapes: \, ", control chars (as \uXXXX), newlines, tabs.
-fn writeJsonEscaped(writer: *std.Io.Writer, s: []const u8) !void {
-    for (s) |c| {
-        switch (c) {
-            '"' => try writer.print("\\\"", .{}),
-            '\\' => try writer.print("\\\\", .{}),
-            '\n' => try writer.print("\\n", .{}),
-            '\r' => try writer.print("\\r", .{}),
-            '\t' => try writer.print("\\t", .{}),
-            0x00...0x08, 0x0B, 0x0C, 0x0E...0x1F => {
-                try writer.print("\\u{x:0>4}", .{@as(u16, c)});
-            },
-            else => try writer.print("{c}", .{c}),
-        }
-    }
+    try jw.endArray();
+    try jw.endObject();
+    try w.print("\n", .{});
 }
 
 fn fmtDuration(buf: *[32]u8, ms: i64) []const u8 {

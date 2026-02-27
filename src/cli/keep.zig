@@ -46,7 +46,11 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         std.process.exit(1);
     } else .merge;
 
-    var ctx = CliContext.open(alloc, stderr);
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    var ctx = CliContext.open(aa, stderr);
     defer ctx.deinit();
 
     const task = ctx.store.getActiveTask() catch {
@@ -55,7 +59,6 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         std.process.exit(1);
         unreachable;
     };
-    defer task.deinit(alloc);
 
     const exp = ctx.store.getExplorationByIndex(task.id, index) catch {
         try stderr.print("error: exploration [{d}] not found\n", .{index});
@@ -63,7 +66,6 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         std.process.exit(1);
         unreachable;
     };
-    defer exp.deinit(alloc);
 
     // Checkout base branch
     try stdout.print("Checking out {s}...\n", .{task.base_branch});
@@ -85,7 +87,6 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     // Add commit trailers
     var sess_buf: [8]agx.Session = undefined;
     const sessions = ctx.store.getSessionsByExploration(exp.id, &sess_buf) catch &[_]agx.Session{};
-    defer agx.Session.deinitSlice(alloc, sessions);
 
     const task_short = task.id.short(6);
 
@@ -94,8 +95,7 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     if (sessions.len > 0 and sessions[0].agent_type != null) trailer_count += 1;
     if (sessions.len > 0 and sessions[0].model_version != null) trailer_count += 1;
 
-    const trailers = try alloc.alloc([2][]const u8, trailer_count);
-    defer alloc.free(trailers);
+    const trailers = try aa.alloc([2][]const u8, trailer_count);
 
     var ti: usize = 0;
     trailers[ti] = .{ "AGX-Task", &task_short };
@@ -129,13 +129,12 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     // Export context if requested
     if (preserve_context) {
         if (agx.context_export.exportTaskContext(
-            alloc,
+            aa,
             &ctx.store,
             &task,
             ".agx/context",
         )) |context_dir| {
             try stdout.print("Context exported to {s}\n", .{context_dir});
-            alloc.free(context_dir);
         } else |err| {
             try stderr.print("warning: could not export context: {s}\n", .{@errorName(err)});
             try stderr.flush();
@@ -147,7 +146,6 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         try stdout.print("Cleaning up worktrees...\n", .{});
         var exp_buf: [32]agx.Exploration = undefined;
         const all_exps = try ctx.store.getExplorationsByTask(task.id, &exp_buf);
-        defer agx.Exploration.deinitSlice(alloc, all_exps);
 
         for (all_exps) |e| {
             ctx.git.removeWorktree(e.worktree_path) catch {};

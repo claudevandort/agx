@@ -4,7 +4,11 @@ const agx = @import("agx");
 const CliContext = @import("cli_common.zig").CliContext;
 
 pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !void {
-    var ctx = CliContext.open(alloc, stderr);
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    var ctx = CliContext.open(aa, stderr);
     defer ctx.deinit();
 
     // Check if --task <id> was given
@@ -31,7 +35,6 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
 fn showAllTasks(store: *agx.Store, alloc: Allocator, stdout: *std.Io.Writer) !void {
     var task_buf: [32]agx.Task = undefined;
     const tasks = try store.getAllTasks(&task_buf);
-    defer agx.Task.deinitSlice(alloc, tasks);
 
     if (tasks.len == 0) {
         try stdout.print("No tasks found. Use 'agx spawn --task \"...\"' to create one.\n", .{});
@@ -48,7 +51,6 @@ fn showAllTasks(store: *agx.Store, alloc: Allocator, stdout: *std.Io.Writer) !vo
 fn showTaskByFilter(store: *agx.Store, alloc: Allocator, filter: []const u8, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !void {
     var task_buf: [32]agx.Task = undefined;
     const tasks = try store.getAllTasks(&task_buf);
-    defer agx.Task.deinitSlice(alloc, tasks);
 
     for (tasks) |task| {
         const encoded = task.id.encode();
@@ -70,10 +72,9 @@ fn showTaskByFilter(store: *agx.Store, alloc: Allocator, filter: []const u8, std
     std.process.exit(1);
 }
 
-fn showExplorations(store: *agx.Store, alloc: Allocator, task_id: agx.Ulid, stdout: *std.Io.Writer) !void {
+fn showExplorations(store: *agx.Store, _: Allocator, task_id: agx.Ulid, stdout: *std.Io.Writer) !void {
     var buf: [32]agx.Exploration = undefined;
     const exps = try store.getExplorationsByTask(task_id, &buf);
-    defer agx.Exploration.deinitSlice(alloc, exps);
 
     for (exps) |exp| {
         const status_icon: []const u8 = switch (exp.status) {

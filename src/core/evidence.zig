@@ -1,5 +1,4 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const Ulid = @import("ulid.zig").Ulid;
 
 pub const EvidenceKind = enum {
@@ -50,13 +49,4 @@ pub const Evidence = struct {
     raw_path: ?[]const u8, // path to full output file
     recorded_at: i64,
 
-    pub fn deinit(self: *const Evidence, alloc: Allocator) void {
-        if (self.hash) |h| alloc.free(h);
-        if (self.summary) |s| alloc.free(s);
-        if (self.raw_path) |p| alloc.free(p);
-    }
-
-    pub fn deinitSlice(alloc: Allocator, slice: []const Evidence) void {
-        for (slice) |*e| e.deinit(alloc);
-    }
 };

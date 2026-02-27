@@ -54,13 +54,16 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         std.process.exit(1);
     };
 
-    const ctx = session_util.getWorktreeContext(alloc, stderr) catch {
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const ctx = session_util.getWorktreeContext(aa, stderr) catch {
         std.process.exit(1);
         unreachable;
     };
-    defer ctx.deinit(alloc);
 
-    var store = try agx.Store.init(alloc, ctx.db_path);
+    var store = try agx.Store.init(aa, ctx.db_path);
     defer store.deinit();
 
     const exp_id = agx.Ulid.decode(ctx.info.exploration_id_str) catch {
@@ -72,17 +75,14 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     // If a file was provided, compute its hash and optionally copy it to evidence store
     var hash: ?[]const u8 = null;
     var raw_path: ?[]const u8 = null;
-    defer if (hash) |h| alloc.free(h);
-    defer if (raw_path) |p| alloc.free(p);
 
     if (file_path) |fp| {
         // Read file and compute SHA-256
-        const file_content = std.fs.cwd().readFileAlloc(alloc, fp, 10 * 1024 * 1024) catch |err| {
+        const file_content = std.fs.cwd().readFileAlloc(aa, fp, 10 * 1024 * 1024) catch |err| {
             try stderr.print("error: could not read file '{s}': {s}\n", .{ fp, @errorName(err) });
             try stderr.flush();
             std.process.exit(1);
         };
-        defer alloc.free(file_content);
 
         var digest: [32]u8 = undefined;
         std.crypto.hash.sha2.Sha256.hash(file_content, &digest, .{});
@@ -95,23 +95,21 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
             hex[idx * 2] = "0123456789abcdef"[high];
             hex[idx * 2 + 1] = "0123456789abcdef"[low];
         }
-        hash = try std.fmt.allocPrint(alloc, "sha256:{s}", .{&hex});
+        hash = try std.fmt.allocPrint(aa, "sha256:{s}", .{&hex});
 
         // Copy file to evidence store
         const exp_id_str = exp_id.encode();
-        const evidence_dir = try std.fmt.allocPrint(alloc, "{s}/agx/evidence/{s}", .{ ctx.common_dir, &exp_id_str });
-        defer alloc.free(evidence_dir);
+        const evidence_dir = try std.fmt.allocPrint(aa, "{s}/agx/evidence/{s}", .{ ctx.common_dir, &exp_id_str });
 
         std.fs.cwd().makePath(evidence_dir) catch {};
 
-        const dest = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ evidence_dir, &hex });
-        defer alloc.free(dest);
+        const dest = try std.fmt.allocPrint(aa, "{s}/{s}", .{ evidence_dir, &hex });
 
         std.fs.cwd().copyFile(fp, std.fs.cwd(), dest, .{}) catch |err| {
             try stderr.print("warning: could not copy evidence file: {s}\n", .{@errorName(err)});
             try stderr.flush();
         };
-        raw_path = try alloc.dupe(u8, dest);
+        raw_path = try aa.dupe(u8, dest);
     }
 
     const now = std.time.milliTimestamp();

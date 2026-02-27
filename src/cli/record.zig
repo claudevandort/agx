@@ -53,13 +53,16 @@ fn recordEvent(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Write
         std.process.exit(1);
     };
 
-    const ctx = session_util.getWorktreeContext(alloc, stderr) catch {
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const ctx = session_util.getWorktreeContext(aa, stderr) catch {
         std.process.exit(1);
         unreachable;
     };
-    defer ctx.deinit(alloc);
 
-    var store = try agx.Store.init(alloc, ctx.db_path);
+    var store = try agx.Store.init(aa, ctx.db_path);
     defer store.deinit();
 
     const sess_id = agx.Ulid.decode(ctx.info.session_id_str) catch {

@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const agx = @import("agx");
 const CliContext = @import("cli_common.zig").CliContext;
+const JsonWriter = agx.json_writer.JsonWriter;
 
 pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !void {
     var index_str: ?[]const u8 = null;
@@ -39,18 +40,20 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         std.process.exit(1);
     };
 
-    var ctx = CliContext.open(alloc, stderr);
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    var ctx = CliContext.open(aa, stderr);
     defer ctx.deinit();
 
     // Find the active task
     const task = ctx.store.getActiveTask() catch {
-        // Try to find any task with this exploration index
         try stderr.print("error: no active task found\n", .{});
         try stderr.flush();
         std.process.exit(1);
         unreachable;
     };
-    defer task.deinit(alloc);
 
     // Find exploration by index
     const exp = ctx.store.getExplorationByIndex(task.id, index) catch {
@@ -59,12 +62,10 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         std.process.exit(1);
         unreachable;
     };
-    defer exp.deinit(alloc);
 
     // Get sessions for this exploration
     var sess_buf: [8]agx.Session = undefined;
     const sessions = try ctx.store.getSessionsByExploration(exp.id, &sess_buf);
-    defer agx.Session.deinitSlice(alloc, sessions);
 
     if (sessions.len == 0) {
         try stdout.print("No sessions found for exploration [{d}]\n", .{index});
@@ -94,25 +95,25 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
 
     for (sessions) |sess| {
         const events = try ctx.store.getEventsBySession(sess.id, kind_filter, ev_buf[0..buf_limit]);
-        defer agx.Event.deinitSlice(alloc, events);
 
         for (events) |ev| {
             if (format_json) {
                 if (!first_json) try stdout.print(",", .{});
                 first_json = false;
-                try stdout.print("{{\"kind\":\"{s}\",\"created_at\":{d}", .{ ev.kind.toStr(), ev.created_at });
+                var jw = JsonWriter.init(stdout);
+                try jw.beginObject();
+                try jw.stringField("kind", ev.kind.toStr());
+                try jw.intField("created_at", ev.created_at);
                 if (ev.data) |d| {
                     // data is expected to be a raw JSON value, but validate
                     // it starts with { or [ or " — otherwise escape as string
                     if (d.len > 0 and (d[0] == '{' or d[0] == '[' or d[0] == '"')) {
-                        try stdout.print(",\"data\":{s}", .{d});
+                        try jw.rawField("data", d);
                     } else {
-                        try stdout.print(",\"data\":\"", .{});
-                        try writeJsonEscaped(stdout, d);
-                        try stdout.print("\"", .{});
+                        try jw.stringField("data", d);
                     }
                 }
-                try stdout.print("}}", .{});
+                try jw.endObject();
             } else {
                 // Human-readable format
                 try printEvent(stdout, &ev);
@@ -137,22 +138,6 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         try stdout.print("\n", .{});
     }
     try stdout.flush();
-}
-
-fn writeJsonEscaped(writer: *std.Io.Writer, s: []const u8) !void {
-    for (s) |c| {
-        switch (c) {
-            '"' => try writer.print("\\\"", .{}),
-            '\\' => try writer.print("\\\\", .{}),
-            '\n' => try writer.print("\\n", .{}),
-            '\r' => try writer.print("\\r", .{}),
-            '\t' => try writer.print("\\t", .{}),
-            0x00...0x08, 0x0B, 0x0C, 0x0E...0x1F => {
-                try writer.print("\\u{x:0>4}", .{@as(u16, c)});
-            },
-            else => try writer.print("{c}", .{c}),
-        }
-    }
 }
 
 fn printEvent(w: *std.Io.Writer, ev: *const agx.Event) !void {

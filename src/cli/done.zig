@@ -14,13 +14,16 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         }
     }
 
-    const ctx = session_util.getWorktreeContext(alloc, stderr) catch {
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const ctx = session_util.getWorktreeContext(aa, stderr) catch {
         std.process.exit(1);
         unreachable;
     };
-    defer ctx.deinit(alloc);
 
-    var store = try agx.Store.init(alloc, ctx.db_path);
+    var store = try agx.Store.init(aa, ctx.db_path);
     defer store.deinit();
 
     const exp_id = agx.Ulid.decode(ctx.info.exploration_id_str) catch {

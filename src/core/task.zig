@@ -1,5 +1,4 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const Ulid = @import("ulid.zig").Ulid;
 
 pub const TaskStatus = enum {
@@ -28,14 +27,4 @@ pub const Task = struct {
     resolved_exploration_id: ?Ulid, // which exploration was kept
     created_at: i64, // ms since epoch
     updated_at: i64,
-
-    pub fn deinit(self: *const Task, alloc: Allocator) void {
-        alloc.free(self.description);
-        alloc.free(self.base_commit);
-        alloc.free(self.base_branch);
-    }
-
-    pub fn deinitSlice(alloc: Allocator, slice: []const Task) void {
-        for (slice) |*t| t.deinit(alloc);
-    }
 };

@@ -3,8 +3,8 @@ const Allocator = std.mem.Allocator;
 const Task = @import("../core/task.zig").Task;
 const Exploration = @import("../core/exploration.zig").Exploration;
 const ExplorationStatus = @import("../core/exploration.zig").ExplorationStatus;
-const Session = @import("../core/session.zig").Session;
 const Evidence = @import("../core/evidence.zig").Evidence;
+const Session = @import("../core/session.zig").Session;
 const Store = @import("../storage/store.zig").Store;
 const GitCli = @import("../git/cli.zig").GitCli;
 
@@ -43,15 +43,6 @@ pub const ExplorationMetrics = struct {
     // Errors
     error_count: u32,
 
-    pub fn deinit(self: *const ExplorationMetrics, alloc: Allocator) void {
-        if (self.approach) |a| alloc.free(a);
-        if (self.summary) |s| alloc.free(s);
-        for (self.changed_files) |f| alloc.free(f);
-        alloc.free(self.changed_files);
-        if (self.agent_type) |a| alloc.free(a);
-        if (self.model_version) |m| alloc.free(m);
-    }
-
     pub fn toStr(self: *const ExplorationMetrics) []const u8 {
         return self.status.toStr();
     }
@@ -87,7 +78,6 @@ fn collectOne(
     var lines_added: u32 = 0;
     var lines_removed: u32 = 0;
     var changed_files_list: std.ArrayList([]const u8) = .empty;
-    defer changed_files_list.deinit(alloc);
 
     if (git.diffNumstat(task.base_commit, "HEAD")) |numstat| {
         defer alloc.free(numstat);
@@ -137,7 +127,6 @@ fn collectOne(
     // Evidence
     var ev_buf: [64]Evidence = undefined;
     const evidence = try store.getEvidenceByExploration(exp.id, &ev_buf);
-    defer Evidence.deinitSlice(alloc, evidence);
 
     var tests_pass: u32 = 0;
     var tests_fail: u32 = 0;
@@ -162,7 +151,6 @@ fn collectOne(
     // Session info (use first session)
     var sess_buf: [8]Session = undefined;
     const sessions = try store.getSessionsByExploration(exp.id, &sess_buf);
-    defer Session.deinitSlice(alloc, sessions);
 
     var agent_type: ?[]const u8 = null;
     var model_version: ?[]const u8 = null;

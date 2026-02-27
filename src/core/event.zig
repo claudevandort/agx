@@ -1,5 +1,4 @@
 const std = @import("std");
-const Allocator = std.mem.Allocator;
 const Ulid = @import("ulid.zig").Ulid;
 
 pub const EventKind = enum {
@@ -31,11 +30,4 @@ pub const Event = struct {
     data: ?[]const u8, // JSON blob
     created_at: i64,
 
-    pub fn deinit(self: *const Event, alloc: Allocator) void {
-        if (self.data) |d| alloc.free(d);
-    }
-
-    pub fn deinitSlice(alloc: Allocator, slice: []const Event) void {
-        for (slice) |*e| e.deinit(alloc);
-    }
 };

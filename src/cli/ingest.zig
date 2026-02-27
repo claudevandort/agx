@@ -22,16 +22,18 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         }
     }
 
-    const git = agx.GitCli.init(alloc, null);
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    const git = agx.GitCli.init(aa, null);
     const git_dir = git.gitDir() catch {
         try stderr.print("error: not a git repository\n", .{});
         try stderr.flush();
         std.process.exit(1);
     };
-    defer alloc.free(git_dir);
 
-    const db_path = try std.fmt.allocPrintSentinel(alloc, "{s}/agx/db.sqlite3", .{git_dir}, 0);
-    defer alloc.free(db_path);
+    const db_path = try std.fmt.allocPrintSentinel(aa, "{s}/agx/db.sqlite3", .{git_dir}, 0);
 
     std.fs.cwd().access(db_path[0..db_path.len :0], .{}) catch {
         try stderr.print("error: agx not initialized. Run 'agx init' first.\n", .{});
@@ -39,11 +41,10 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         std.process.exit(1);
     };
 
-    var store = try agx.Store.init(alloc, db_path);
+    var store = try agx.Store.init(aa, db_path);
     defer store.deinit();
 
-    const events_dir = try std.fmt.allocPrint(alloc, "{s}/agx/events", .{git_dir});
-    defer alloc.free(events_dir);
+    const events_dir = try std.fmt.allocPrint(aa, "{s}/agx/events", .{git_dir});
 
     // Ensure events directory exists
     std.fs.cwd().makePath(events_dir) catch {};
@@ -51,9 +52,9 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     if (watch) {
         try stdout.print("Watching {s} for events (poll: {d}ms)...\n", .{ events_dir, poll_ms });
         try stdout.flush();
-        try agx.file_watcher.watchLoop(alloc, &store, events_dir, poll_ms, stdout, 0);
+        try agx.file_watcher.watchLoop(aa, &store, events_dir, poll_ms, stdout, 0);
     } else {
-        const result = try agx.file_watcher.scanAndIngest(alloc, &store, events_dir);
+        const result = try agx.file_watcher.scanAndIngest(aa, &store, events_dir);
 
         if (result.events_ingested == 0 and result.errors == 0) {
             try stdout.print("No new events to ingest.\n", .{});

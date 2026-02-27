@@ -6,7 +6,11 @@ const CliContext = @import("cli_common.zig").CliContext;
 pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !void {
     _ = args;
 
-    var ctx = CliContext.open(alloc, stderr);
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    var ctx = CliContext.open(aa, stderr);
     defer ctx.deinit();
 
     // Find all resolved tasks
@@ -22,7 +26,6 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         // Get explorations for this task
         var exp_buf: [32]agx.Exploration = undefined;
         const exps = ctx.store.getExplorationsByTask(task_id, &exp_buf) catch continue;
-        defer agx.Exploration.deinitSlice(alloc, exps);
 
         for (exps) |e| {
             // Remove worktree if it still exists
@@ -38,15 +41,13 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
 
         // Remove the worktree directory structure
         const task_short = task_id.short(6);
-        const worktree_dir = std.fmt.allocPrint(alloc, "{s}/agx/worktrees/{s}", .{ ctx.git_dir, &task_short }) catch continue;
-        defer alloc.free(worktree_dir);
+        const worktree_dir = std.fmt.allocPrint(aa, "{s}/agx/worktrees/{s}", .{ ctx.git_dir, &task_short }) catch continue;
         std.fs.cwd().deleteTree(worktree_dir) catch {};
 
         // Remove evidence directory
         for (exps) |e| {
             const exp_id_str = e.id.encode();
-            const evidence_dir = std.fmt.allocPrint(alloc, "{s}/agx/evidence/{s}", .{ ctx.git_dir, &exp_id_str }) catch continue;
-            defer alloc.free(evidence_dir);
+            const evidence_dir = std.fmt.allocPrint(aa, "{s}/agx/evidence/{s}", .{ ctx.git_dir, &exp_id_str }) catch continue;
             std.fs.cwd().deleteTree(evidence_dir) catch {};
         }
 
