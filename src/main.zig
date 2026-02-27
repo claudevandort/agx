@@ -7,6 +7,7 @@ const status_cmd = @import("cli/status.zig");
 const done_cmd = @import("cli/done.zig");
 const approach_cmd = @import("cli/approach.zig");
 const evidence_cmd = @import("cli/evidence.zig");
+const compare_cmd = @import("cli/compare.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -66,6 +67,12 @@ pub fn main() !void {
     } else if (std.mem.eql(u8, command, "evidence")) {
         evidence_cmd.run(alloc, cmd_args, stdout, stderr) catch |err| {
             try stderr.print("agx evidence: {s}\n", .{@errorName(err)});
+            try stderr.flush();
+            std.process.exit(1);
+        };
+    } else if (std.mem.eql(u8, command, "compare")) {
+        compare_cmd.run(alloc, cmd_args, stdout, stderr) catch |err| {
+            try stderr.print("agx compare: {s}\n", .{@errorName(err)});
             try stderr.flush();
             std.process.exit(1);
         };

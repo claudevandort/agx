@@ -267,6 +267,36 @@ pub const Store = struct {
         _ = try stmt.step();
     }
 
+    pub fn getSessionsByExploration(self: *Store, exploration_id: Ulid, buf: []Session) StoreError![]Session {
+        var stmt = try self.db.prepare(
+            "SELECT id, exploration_id, agent_type, model_version, environment_fingerprint, initial_prompt, exit_reason, started_at, ended_at FROM sessions WHERE exploration_id = ?1 ORDER BY started_at",
+        );
+        defer stmt.finalize();
+        try stmt.bindBlob(1, &exploration_id.bytes);
+
+        var count: usize = 0;
+        while (count < buf.len) {
+            const result = try stmt.step();
+            if (result != .row) break;
+            buf[count] = .{
+                .id = readUlid(&stmt, 0),
+                .exploration_id = readUlid(&stmt, 1),
+                .agent_type = try self.dupeOptionalText(stmt.columnText(2)),
+                .model_version = try self.dupeOptionalText(stmt.columnText(3)),
+                .environment_fingerprint = try self.dupeOptionalText(stmt.columnText(4)),
+                .initial_prompt = try self.dupeOptionalText(stmt.columnText(5)),
+                .exit_reason = if (stmt.columnText(6)) |r| (ExitReason.fromStr(r) catch null) else null,
+                .started_at = stmt.columnInt64(7),
+                .ended_at = blk: {
+                    const val = stmt.columnInt64(8);
+                    break :blk if (val == 0) null else val;
+                },
+            };
+            count += 1;
+        }
+        return buf[0..count];
+    }
+
     // ── Event CRUD ──
 
     pub fn insertEvent(self: *Store, event: Event) StoreError!void {

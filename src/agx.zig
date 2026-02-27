@@ -10,6 +10,8 @@ pub const snapshot = @import("core/snapshot.zig");
 pub const migrations = @import("storage/migrations.zig");
 pub const store = @import("storage/store.zig");
 pub const git = @import("git/cli.zig");
+pub const compare_metrics = @import("compare/metrics.zig");
+pub const compare_renderer = @import("compare/renderer.zig");
 
 // Re-export key types for convenience
 pub const Ulid = ulid.Ulid;
