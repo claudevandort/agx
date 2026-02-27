@@ -222,19 +222,19 @@ pub const GitCli = struct {
         const msg_trimmed = std.mem.trimRight(u8, msg_result.stdout, "\n\r ");
 
         // Build new message with trailers appended
-        var buf = std.ArrayList(u8).init(self.alloc);
-        defer buf.deinit();
+        var buf: std.ArrayList(u8) = .empty;
+        defer buf.deinit(self.alloc);
 
-        try buf.appendSlice(msg_trimmed);
-        try buf.appendSlice("\n");
+        try buf.appendSlice(self.alloc, msg_trimmed);
+        try buf.appendSlice(self.alloc, "\n");
         for (trailers) |trailer| {
-            try buf.appendSlice("\n");
-            try buf.appendSlice(trailer[0]);
-            try buf.appendSlice(": ");
-            try buf.appendSlice(trailer[1]);
+            try buf.appendSlice(self.alloc, "\n");
+            try buf.appendSlice(self.alloc, trailer[0]);
+            try buf.appendSlice(self.alloc, ": ");
+            try buf.appendSlice(self.alloc, trailer[1]);
         }
 
-        const new_msg = try buf.toOwnedSlice();
+        const new_msg = try buf.toOwnedSlice(self.alloc);
         defer self.alloc.free(new_msg);
 
         const r = try self.runChecked(&.{ "commit", "--amend", "-m", new_msg });

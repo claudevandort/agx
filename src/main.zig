@@ -8,6 +8,10 @@ const done_cmd = @import("cli/done.zig");
 const approach_cmd = @import("cli/approach.zig");
 const evidence_cmd = @import("cli/evidence.zig");
 const compare_cmd = @import("cli/compare.zig");
+const keep_cmd = @import("cli/keep.zig");
+const archive_cmd = @import("cli/archive.zig");
+const discard_cmd = @import("cli/discard.zig");
+const clean_cmd = @import("cli/clean.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -73,6 +77,30 @@ pub fn main() !void {
     } else if (std.mem.eql(u8, command, "compare")) {
         compare_cmd.run(alloc, cmd_args, stdout, stderr) catch |err| {
             try stderr.print("agx compare: {s}\n", .{@errorName(err)});
+            try stderr.flush();
+            std.process.exit(1);
+        };
+    } else if (std.mem.eql(u8, command, "keep")) {
+        keep_cmd.run(alloc, cmd_args, stdout, stderr) catch |err| {
+            try stderr.print("agx keep: {s}\n", .{@errorName(err)});
+            try stderr.flush();
+            std.process.exit(1);
+        };
+    } else if (std.mem.eql(u8, command, "archive")) {
+        archive_cmd.run(alloc, cmd_args, stdout, stderr) catch |err| {
+            try stderr.print("agx archive: {s}\n", .{@errorName(err)});
+            try stderr.flush();
+            std.process.exit(1);
+        };
+    } else if (std.mem.eql(u8, command, "discard")) {
+        discard_cmd.run(alloc, cmd_args, stdout, stderr) catch |err| {
+            try stderr.print("agx discard: {s}\n", .{@errorName(err)});
+            try stderr.flush();
+            std.process.exit(1);
+        };
+    } else if (std.mem.eql(u8, command, "clean")) {
+        clean_cmd.run(alloc, cmd_args, stdout, stderr) catch |err| {
+            try stderr.print("agx clean: {s}\n", .{@errorName(err)});
             try stderr.flush();
             std.process.exit(1);
         };
