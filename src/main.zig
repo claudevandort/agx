@@ -3,6 +3,8 @@ const agx = @import("agx");
 
 const init_cmd = @import("cli/init.zig");
 const spawn_cmd = @import("cli/spawn.zig");
+const status_cmd = @import("cli/status.zig");
+const done_cmd = @import("cli/done.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -38,6 +40,18 @@ pub fn main() !void {
     } else if (std.mem.eql(u8, command, "spawn")) {
         spawn_cmd.run(alloc, cmd_args, stdout, stderr) catch |err| {
             try stderr.print("agx spawn: {s}\n", .{@errorName(err)});
+            try stderr.flush();
+            std.process.exit(1);
+        };
+    } else if (std.mem.eql(u8, command, "status")) {
+        status_cmd.run(alloc, cmd_args, stdout, stderr) catch |err| {
+            try stderr.print("agx status: {s}\n", .{@errorName(err)});
+            try stderr.flush();
+            std.process.exit(1);
+        };
+    } else if (std.mem.eql(u8, command, "done")) {
+        done_cmd.run(alloc, cmd_args, stdout, stderr) catch |err| {
+            try stderr.print("agx done: {s}\n", .{@errorName(err)});
             try stderr.flush();
             std.process.exit(1);
         };

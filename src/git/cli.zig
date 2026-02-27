@@ -91,6 +91,11 @@ pub const GitCli = struct {
         return self.runTrimmed(&.{ "rev-parse", "--git-dir" });
     }
 
+    /// Get the common git dir (shared across worktrees).
+    pub fn gitCommonDir(self: *const GitCli) ![]u8 {
+        return self.runTrimmed(&.{ "rev-parse", "--git-common-dir" });
+    }
+
     pub fn headCommit(self: *const GitCli) ![]u8 {
         return self.runTrimmed(&.{ "rev-parse", "HEAD" });
     }
