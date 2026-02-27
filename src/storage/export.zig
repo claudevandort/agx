@@ -73,6 +73,18 @@ fn writeSummary(
     var fw = file.writer(&buf);
     const w = &fw.interface;
 
+    // Write YAML-style frontmatter
+    const task_id_str = task.id.encode();
+    const date_str = formatDate(task.created_at);
+    try w.print("---\n", .{});
+    try w.print("task_id: {s}\n", .{&task_id_str});
+    try w.print("description: {s}\n", .{task.description});
+    try w.print("status: {s}\n", .{task.status.toStr()});
+    try w.print("base_branch: {s}\n", .{task.base_branch});
+    try w.print("date: {s}\n", .{&date_str});
+    try w.print("explorations: {d}\n", .{explorations.len});
+    try w.print("---\n\n", .{});
+
     const task_short = task.id.short(6);
     try w.print("# Task {s}: {s}\n\n", .{ &task_short, task.description });
     try w.print("- Base branch: {s}\n", .{task.base_branch});
@@ -251,4 +263,19 @@ fn writeDecisionLog(
     }
 
     try w.flush();
+}
+
+/// Format millisecond-epoch timestamp as YYYY-MM-DD.
+fn formatDate(ms_epoch: i64) [10]u8 {
+    const secs: u64 = @intCast(@divTrunc(ms_epoch, 1000));
+    const es = std.time.epoch.EpochSeconds{ .secs = secs };
+    const yd = es.getEpochDay().calculateYearDay();
+    const md = yd.calculateMonthDay();
+    var buf: [10]u8 = undefined;
+    _ = std.fmt.bufPrint(&buf, "{d:0>4}-{d:0>2}-{d:0>2}", .{
+        yd.year,
+        @as(u32, @intFromEnum(md.month)),
+        @as(u32, md.day_index) + 1,
+    }) catch unreachable;
+    return buf;
 }

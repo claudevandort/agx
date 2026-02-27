@@ -14,6 +14,7 @@ const clean_cmd = @import("cli/clean.zig");
 const ingest_cmd = @import("cli/ingest.zig");
 const record_cmd = @import("cli/record.zig");
 const log_cmd = @import("cli/log.zig");
+const context_cmd = @import("cli/context.zig");
 
 const CommandFn = *const fn (std.mem.Allocator, []const []const u8, *std.Io.Writer, *std.Io.Writer) anyerror!void;
 
@@ -32,6 +33,7 @@ const commands = std.StaticStringMap(CommandFn).initComptime(.{
     .{ "ingest", ingest_cmd.run },
     .{ "record", record_cmd.run },
     .{ "log", log_cmd.run },
+    .{ "context", context_cmd.run },
 });
 
 // NOTE: CLI commands call std.process.exit(1) on user-facing errors, which skips
@@ -103,6 +105,7 @@ fn printUsage(writer: *std.Io.Writer) !void {
         \\  record     Record an event (CLI-based agent integration)
         \\  log        View events for an exploration
         \\  ingest     Ingest events from JSONL files
+        \\  context    Query archived exploration context
         \\  version    Show version
         \\  help       Show this help
         \\

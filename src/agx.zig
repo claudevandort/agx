@@ -16,6 +16,7 @@ pub const context_export = @import("storage/export.zig");
 pub const ingest = @import("daemon/ingest.zig");
 pub const file_watcher = @import("daemon/file_watcher.zig");
 pub const json_writer = @import("util/json_writer.zig");
+pub const frontmatter = @import("util/frontmatter.zig");
 
 // Re-export key types for convenience
 pub const Ulid = ulid.Ulid;

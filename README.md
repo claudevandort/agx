@@ -91,6 +91,19 @@ AGX-Agent: claude-code
 AGX-Model: claude-sonnet-4-20250514
 ```
 
+### Searching archived context
+
+After using `--preserve-context`, the exported context is searchable:
+
+```bash
+agx context list                       # list all archived tasks
+agx context list --status resolved     # filter by status
+agx context search "auth middleware"   # search across all context files
+agx context search "test" --task 01JK  # search within a specific task
+```
+
+Context files in `.agx/context/` are tracked by git, so the full exploration history is available to anyone who clones the repo — even without `agx init`.
+
 ## Agent Integration
 
 Agents can integrate at two levels:
@@ -171,6 +184,7 @@ IDs are ULIDs (time-sortable, globally unique).
 | `agx archive` | Preserve context and remove worktree |
 | `agx discard` | Remove worktree without preserving context |
 | `agx clean` | Remove all artifacts from resolved tasks |
+| `agx context` | List and search archived exploration context |
 | `agx ingest` | Ingest agent events from JSONL files |
 
 ## Building & Testing
