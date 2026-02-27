@@ -12,6 +12,7 @@ const keep_cmd = @import("cli/keep.zig");
 const archive_cmd = @import("cli/archive.zig");
 const discard_cmd = @import("cli/discard.zig");
 const clean_cmd = @import("cli/clean.zig");
+const ingest_cmd = @import("cli/ingest.zig");
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -104,6 +105,12 @@ pub fn main() !void {
             try stderr.flush();
             std.process.exit(1);
         };
+    } else if (std.mem.eql(u8, command, "ingest")) {
+        ingest_cmd.run(alloc, cmd_args, stdout, stderr) catch |err| {
+            try stderr.print("agx ingest: {s}\n", .{@errorName(err)});
+            try stderr.flush();
+            std.process.exit(1);
+        };
     } else if (std.mem.eql(u8, command, "version")) {
         try stdout.print("agx v0.1.0\n", .{});
     } else if (std.mem.eql(u8, command, "help") or std.mem.eql(u8, command, "--help") or std.mem.eql(u8, command, "-h")) {
@@ -135,6 +142,7 @@ fn printUsage(writer: *std.Io.Writer) !void {
         \\  archive    Archive an exploration (preserve context)
         \\  discard    Remove an exploration
         \\  clean      Remove all resolved task artifacts
+        \\  ingest     Ingest events from JSONL files
         \\  version    Show version
         \\  help       Show this help
         \\

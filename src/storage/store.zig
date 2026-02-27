@@ -374,6 +374,28 @@ pub const Store = struct {
         return buf[0..count];
     }
 
+    // ── Ingest offset tracking ──
+
+    pub fn getIngestOffset(self: *Store, file_name: []const u8) StoreError!usize {
+        var stmt = try self.db.prepare("SELECT byte_offset FROM ingest_offsets WHERE file_name = ?1");
+        defer stmt.finalize();
+        try stmt.bindText(1, file_name);
+        const result = try stmt.step();
+        if (result != .row) return 0;
+        return @intCast(stmt.columnInt64(0));
+    }
+
+    pub fn setIngestOffset(self: *Store, file_name: []const u8, offset: usize) StoreError!void {
+        var stmt = try self.db.prepare(
+            "INSERT OR REPLACE INTO ingest_offsets (file_name, byte_offset, updated_at) VALUES (?1, ?2, ?3)",
+        );
+        defer stmt.finalize();
+        try stmt.bindText(1, file_name);
+        try stmt.bindInt64(2, @intCast(offset));
+        try stmt.bindInt64(3, std.time.milliTimestamp());
+        _ = try stmt.step();
+    }
+
     // ── Snapshot CRUD ──
 
     pub fn insertSnapshot(self: *Store, snap: Snapshot) StoreError!void {

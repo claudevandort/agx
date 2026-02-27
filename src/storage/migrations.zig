@@ -76,4 +76,11 @@ pub const migrations = [_][]const u8{
     \\CREATE INDEX IF NOT EXISTS idx_evidence_exploration ON evidence(exploration_id);
     \\CREATE INDEX IF NOT EXISTS idx_snapshots_session ON snapshots(session_id);
     ,
+    // Migration 1: ingest offset tracking
+    \\CREATE TABLE IF NOT EXISTS ingest_offsets (
+    \\    file_name TEXT PRIMARY KEY,
+    \\    byte_offset INTEGER NOT NULL,
+    \\    updated_at INTEGER NOT NULL
+    \\);
+    ,
 };
