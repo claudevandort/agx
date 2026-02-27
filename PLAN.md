@@ -214,6 +214,63 @@ agx/
 - **Integration tests**: `test/integration/full_workflow_test.zig` — spawn 3 explorations in a temp git repo, simulate file changes in each worktree, run compare, keep one, archive the rest, verify merge, trailers, and cleanup
 - **Manual smoke test**: `agx init && agx spawn --task "test" --count 2`, make changes in each worktree, `agx done` in each, `agx compare`, `agx keep 1`, verify commit trailers in `git log`
 
+## Next: Agent Orchestration (Steps 12–16)
+
+### 12. Claude Code skill-based integration (manual orchestration)
+
+Test agx with real agents using Claude Code skills — no agx code changes needed:
+
+- **`agx-lead` skill** — for the team lead agent. Instructions on how to:
+  - `agx init` and `agx spawn` to set up parallel explorations
+  - Launch teammates in the spawned worktrees
+  - Monitor with `agx status` and `agx compare`
+  - Pick the winner with `agx keep`, clean up with `agx archive`/`agx discard`/`agx clean`
+
+- **`agx-teammate` skill** — for each teammate agent working in a worktree. Instructions on how to:
+  - Read `.agx-session` to discover session/exploration context
+  - `agx approach "..."` to declare strategy early
+  - `agx evidence` to record test/build results
+  - `agx done --summary "..."` when finished
+
+### 13. Orchestrator command (`agx spawn --run`)
+
+Extend `agx spawn` to optionally launch a command in each worktree:
+
+```bash
+agx spawn --task "fix auth" --count 3 --run "claude -p 'fix the auth bug'"
+```
+
+- Fork a child process per worktree with cwd set to the worktree path
+- Track PIDs in the session record
+- On process exit: auto-mark exploration `done`, capture exit code
+
+### 14. Auto-evidence collection (`--verify`)
+
+Run a verification command after each agent exits:
+
+```bash
+agx spawn --task "fix auth" --count 3 --run "claude -p '...'" --verify "npm test"
+```
+
+- Execute verify command in each worktree after the agent process exits
+- Parse exit code → `pass`/`fail`, capture stdout as evidence summary
+- Record as `agx evidence --kind test_result --status pass/fail`
+
+### 15. Auto-done detection
+
+When the orchestrator is not used (agents launched manually):
+- `agx ingest --watch` detects stale explorations (no new events for N minutes) and marks them done
+- Or a new `agx watch` command that monitors worktree git activity
+
+### 16. Policy enforcement on `agx keep`
+
+```bash
+agx keep 2 --require-evidence          # must have at least one evidence record
+agx keep 2 --require-tests-pass        # must have passing test_result evidence
+```
+
+Fail with a clear error if the exploration doesn't meet the policy. `--force` to override.
+
 ## Future Extensibility
 
 The architecture naturally extends to:
