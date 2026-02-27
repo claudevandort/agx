@@ -1,5 +1,4 @@
 const std = @import("std");
-const agx = @import("agx");
 
 const init_cmd = @import("cli/init.zig");
 const spawn_cmd = @import("cli/spawn.zig");
@@ -15,6 +14,25 @@ const clean_cmd = @import("cli/clean.zig");
 const ingest_cmd = @import("cli/ingest.zig");
 const record_cmd = @import("cli/record.zig");
 const log_cmd = @import("cli/log.zig");
+
+const CommandFn = *const fn (std.mem.Allocator, []const []const u8, *std.Io.Writer, *std.Io.Writer) anyerror!void;
+
+const commands = std.StaticStringMap(CommandFn).initComptime(.{
+    .{ "init", init_cmd.run },
+    .{ "spawn", spawn_cmd.run },
+    .{ "status", status_cmd.run },
+    .{ "done", done_cmd.run },
+    .{ "approach", approach_cmd.run },
+    .{ "evidence", evidence_cmd.run },
+    .{ "compare", compare_cmd.run },
+    .{ "keep", keep_cmd.run },
+    .{ "archive", archive_cmd.run },
+    .{ "discard", discard_cmd.run },
+    .{ "clean", clean_cmd.run },
+    .{ "ingest", ingest_cmd.run },
+    .{ "record", record_cmd.run },
+    .{ "log", log_cmd.run },
+});
 
 // NOTE: CLI commands call std.process.exit(1) on user-facing errors, which skips
 // defer cleanup (store.deinit, GPA leak detection). This is an accepted trade-off
@@ -45,87 +63,9 @@ pub fn main() !void {
     const command = args[1];
     const cmd_args = args[2..];
 
-    if (std.mem.eql(u8, command, "init")) {
-        init_cmd.run(alloc, cmd_args, stdout, stderr) catch |err| {
-            try stderr.print("agx init: {s}\n", .{@errorName(err)});
-            try stderr.flush();
-            std.process.exit(1);
-        };
-    } else if (std.mem.eql(u8, command, "spawn")) {
-        spawn_cmd.run(alloc, cmd_args, stdout, stderr) catch |err| {
-            try stderr.print("agx spawn: {s}\n", .{@errorName(err)});
-            try stderr.flush();
-            std.process.exit(1);
-        };
-    } else if (std.mem.eql(u8, command, "status")) {
-        status_cmd.run(alloc, cmd_args, stdout, stderr) catch |err| {
-            try stderr.print("agx status: {s}\n", .{@errorName(err)});
-            try stderr.flush();
-            std.process.exit(1);
-        };
-    } else if (std.mem.eql(u8, command, "done")) {
-        done_cmd.run(alloc, cmd_args, stdout, stderr) catch |err| {
-            try stderr.print("agx done: {s}\n", .{@errorName(err)});
-            try stderr.flush();
-            std.process.exit(1);
-        };
-    } else if (std.mem.eql(u8, command, "approach")) {
-        approach_cmd.run(alloc, cmd_args, stdout, stderr) catch |err| {
-            try stderr.print("agx approach: {s}\n", .{@errorName(err)});
-            try stderr.flush();
-            std.process.exit(1);
-        };
-    } else if (std.mem.eql(u8, command, "evidence")) {
-        evidence_cmd.run(alloc, cmd_args, stdout, stderr) catch |err| {
-            try stderr.print("agx evidence: {s}\n", .{@errorName(err)});
-            try stderr.flush();
-            std.process.exit(1);
-        };
-    } else if (std.mem.eql(u8, command, "compare")) {
-        compare_cmd.run(alloc, cmd_args, stdout, stderr) catch |err| {
-            try stderr.print("agx compare: {s}\n", .{@errorName(err)});
-            try stderr.flush();
-            std.process.exit(1);
-        };
-    } else if (std.mem.eql(u8, command, "keep")) {
-        keep_cmd.run(alloc, cmd_args, stdout, stderr) catch |err| {
-            try stderr.print("agx keep: {s}\n", .{@errorName(err)});
-            try stderr.flush();
-            std.process.exit(1);
-        };
-    } else if (std.mem.eql(u8, command, "archive")) {
-        archive_cmd.run(alloc, cmd_args, stdout, stderr) catch |err| {
-            try stderr.print("agx archive: {s}\n", .{@errorName(err)});
-            try stderr.flush();
-            std.process.exit(1);
-        };
-    } else if (std.mem.eql(u8, command, "discard")) {
-        discard_cmd.run(alloc, cmd_args, stdout, stderr) catch |err| {
-            try stderr.print("agx discard: {s}\n", .{@errorName(err)});
-            try stderr.flush();
-            std.process.exit(1);
-        };
-    } else if (std.mem.eql(u8, command, "clean")) {
-        clean_cmd.run(alloc, cmd_args, stdout, stderr) catch |err| {
-            try stderr.print("agx clean: {s}\n", .{@errorName(err)});
-            try stderr.flush();
-            std.process.exit(1);
-        };
-    } else if (std.mem.eql(u8, command, "ingest")) {
-        ingest_cmd.run(alloc, cmd_args, stdout, stderr) catch |err| {
-            try stderr.print("agx ingest: {s}\n", .{@errorName(err)});
-            try stderr.flush();
-            std.process.exit(1);
-        };
-    } else if (std.mem.eql(u8, command, "record")) {
-        record_cmd.run(alloc, cmd_args, stdout, stderr) catch |err| {
-            try stderr.print("agx record: {s}\n", .{@errorName(err)});
-            try stderr.flush();
-            std.process.exit(1);
-        };
-    } else if (std.mem.eql(u8, command, "log")) {
-        log_cmd.run(alloc, cmd_args, stdout, stderr) catch |err| {
-            try stderr.print("agx log: {s}\n", .{@errorName(err)});
+    if (commands.get(command)) |run_fn| {
+        run_fn(alloc, cmd_args, stdout, stderr) catch |err| {
+            try stderr.print("agx {s}: {s}\n", .{ command, @errorName(err) });
             try stderr.flush();
             std.process.exit(1);
         };

@@ -20,9 +20,6 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     defer alloc.free(git_dir);
 
     // Create .git/agx/ directory structure
-    const agx_dir = try std.fmt.allocPrint(alloc, "{s}/agx", .{git_dir});
-    defer alloc.free(agx_dir);
-
     const dirs = [_][]const u8{
         "agx",
         "agx/cache",

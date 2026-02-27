@@ -34,4 +34,8 @@ pub const Task = struct {
         alloc.free(self.base_commit);
         alloc.free(self.base_branch);
     }
+
+    pub fn deinitSlice(alloc: Allocator, slice: []const Task) void {
+        for (slice) |*t| t.deinit(alloc);
+    }
 };

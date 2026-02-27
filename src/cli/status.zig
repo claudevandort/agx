@@ -29,83 +29,38 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
 }
 
 fn showAllTasks(store: *agx.Store, alloc: Allocator, stdout: *std.Io.Writer) !void {
-    // Get all active tasks - query directly
-    var stmt = try store.db.prepare(
-        "SELECT id, description, base_branch, status, created_at FROM tasks ORDER BY created_at DESC",
-    );
-    defer stmt.finalize();
+    var task_buf: [32]agx.Task = undefined;
+    const tasks = try store.getAllTasks(&task_buf);
+    defer agx.Task.deinitSlice(alloc, tasks);
 
-    var found = false;
-    while (true) {
-        const result = try stmt.step();
-        if (result != .row) break;
-        found = true;
-
-        const id_blob = stmt.columnBlob(0);
-        const desc = stmt.columnText(1) orelse "(no description)";
-        const branch = stmt.columnText(2) orelse "?";
-        const status = stmt.columnText(3) orelse "?";
-
-        var short: [6]u8 = undefined;
-        if (id_blob) |blob| {
-            if (blob.len >= 16) {
-                const ulid = agx.Ulid{ .bytes = blob[0..16].* };
-                short = ulid.short(6);
-            } else {
-                short = "??????".*;
-            }
-        } else {
-            short = "??????".*;
-        }
-
-        try stdout.print("{s}  {s:<12} {s:<20} base:{s}\n", .{ &short, status, desc, branch });
-
-        // Show explorations for this task
-        if (id_blob) |blob| {
-            if (blob.len >= 16) {
-                const task_id = agx.Ulid{ .bytes = blob[0..16].* };
-                try showExplorations(store, alloc, task_id, stdout);
-            }
-        }
+    if (tasks.len == 0) {
+        try stdout.print("No tasks found. Use 'agx spawn --task \"...\"' to create one.\n", .{});
+        return;
     }
 
-    if (!found) {
-        try stdout.print("No tasks found. Use 'agx spawn --task \"...\"' to create one.\n", .{});
+    for (tasks) |task| {
+        const short = task.id.short(6);
+        try stdout.print("{s}  {s:<12} {s:<20} base:{s}\n", .{ &short, task.status.toStr(), task.description, task.base_branch });
+        try showExplorations(store, alloc, task.id, stdout);
     }
 }
 
 fn showTaskByFilter(store: *agx.Store, alloc: Allocator, filter: []const u8, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !void {
-    // Try to find task by short ID prefix
-    var stmt = try store.db.prepare(
-        "SELECT id, description, base_commit, base_branch, status, created_at FROM tasks ORDER BY created_at DESC",
-    );
-    defer stmt.finalize();
+    var task_buf: [32]agx.Task = undefined;
+    const tasks = try store.getAllTasks(&task_buf);
+    defer agx.Task.deinitSlice(alloc, tasks);
 
-    while (true) {
-        const result = try stmt.step();
-        if (result != .row) break;
-
-        const id_blob = stmt.columnBlob(0) orelse continue;
-        if (id_blob.len < 16) continue;
-
-        const ulid = agx.Ulid{ .bytes = id_blob[0..16].* };
-        const encoded = ulid.encode();
-
-        // Check if filter matches prefix of encoded ULID (case-insensitive)
+    for (tasks) |task| {
+        const encoded = task.id.encode();
         if (filter.len > encoded.len) continue;
         if (std.ascii.eqlIgnoreCase(filter, encoded[0..filter.len])) {
-            const desc = stmt.columnText(1) orelse "(no description)";
-            const base_commit = stmt.columnText(2) orelse "?";
-            const base_branch = stmt.columnText(3) orelse "?";
-            const status = stmt.columnText(4) orelse "?";
-
-            const short = ulid.short(6);
-            try stdout.print("Task {s}: {s}\n", .{ &short, desc });
-            try stdout.print("  Status: {s}\n", .{status});
-            try stdout.print("  Base:   {s} ({s})\n", .{ base_branch, base_commit[0..@min(8, base_commit.len)] });
+            const short = task.id.short(6);
+            try stdout.print("Task {s}: {s}\n", .{ &short, task.description });
+            try stdout.print("  Status: {s}\n", .{task.status.toStr()});
+            try stdout.print("  Base:   {s} ({s})\n", .{ task.base_branch, task.base_commit[0..@min(8, task.base_commit.len)] });
             try stdout.print("\n", .{});
 
-            try showExplorations(store, alloc, ulid, stdout);
+            try showExplorations(store, alloc, task.id, stdout);
             return;
         }
     }

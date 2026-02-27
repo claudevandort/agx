@@ -10,22 +10,14 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     defer ctx.deinit();
 
     // Find all resolved tasks
-    var stmt = try ctx.store.db.prepare(
-        "SELECT id FROM tasks WHERE status = 'resolved'",
-    );
-    defer stmt.finalize();
+    var id_buf: [64]agx.Ulid = undefined;
+    const resolved_ids = try ctx.store.getResolvedTaskIds(&id_buf);
 
     var cleaned_tasks: u32 = 0;
     var cleaned_worktrees: u32 = 0;
     var cleaned_branches: u32 = 0;
 
-    while (true) {
-        const result = try stmt.step();
-        if (result != .row) break;
-
-        const id_blob = stmt.columnBlob(0) orelse continue;
-        if (id_blob.len < 16) continue;
-        const task_id = agx.Ulid{ .bytes = id_blob[0..16].* };
+    for (resolved_ids) |task_id| {
 
         // Get explorations for this task
         var exp_buf: [32]agx.Exploration = undefined;

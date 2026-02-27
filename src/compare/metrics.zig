@@ -1,6 +1,5 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const Ulid = @import("../core/ulid.zig").Ulid;
 const Task = @import("../core/task.zig").Task;
 const Exploration = @import("../core/exploration.zig").Exploration;
 const ExplorationStatus = @import("../core/exploration.zig").ExplorationStatus;
@@ -42,7 +41,7 @@ pub const ExplorationMetrics = struct {
     ended_at: ?i64,
 
     // Errors
-    error_count: i64,
+    error_count: u32,
 
     pub fn deinit(self: *const ExplorationMetrics, alloc: Allocator) void {
         if (self.approach) |a| alloc.free(a);
@@ -181,7 +180,8 @@ fn collectOne(
     }
 
     // Error count
-    const error_count = store.countErrorsByExploration(exp.id) catch 0;
+    const error_count_raw = store.countErrorsByExploration(exp.id) catch 0;
+    const error_count: u32 = if (error_count_raw < 0) 0 else @intCast(@min(error_count_raw, std.math.maxInt(u32)));
 
     return .{
         .index = exp.index,

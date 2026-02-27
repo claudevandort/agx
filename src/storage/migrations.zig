@@ -83,4 +83,8 @@ pub const migrations = [_][]const u8{
     \\    updated_at INTEGER NOT NULL
     \\);
     ,
+    // Migration 2: schema constraints
+    \\CREATE UNIQUE INDEX IF NOT EXISTS idx_explorations_task_idx ON explorations(task_id, idx);
+    \\
+    ,
 };

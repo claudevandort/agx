@@ -479,6 +479,53 @@ pub const Store = struct {
         return buf[0..count];
     }
 
+    // ── Task queries ──
+
+    pub fn getAllTasks(self: *Store, buf: []Task) StoreError![]Task {
+        var stmt = try self.db.prepare(
+            "SELECT id, description, base_commit, base_branch, status, resolved_exploration_id, created_at, updated_at FROM tasks ORDER BY created_at DESC",
+        );
+        defer stmt.finalize();
+
+        var count: usize = 0;
+        errdefer Task.deinitSlice(self.alloc, buf[0..count]);
+        while (count < buf.len) {
+            const result = try stmt.step();
+            if (result != .row) break;
+            buf[count] = try self.readTask(&stmt);
+            count += 1;
+        }
+        if (count == buf.len) {
+            const extra = try stmt.step();
+            if (extra == .row) {
+                std.log.warn("getAllTasks: buffer full ({d}), results truncated", .{buf.len});
+            }
+        }
+        return buf[0..count];
+    }
+
+    pub fn getResolvedTaskIds(self: *Store, buf: []Ulid) StoreError![]Ulid {
+        var stmt = try self.db.prepare(
+            "SELECT id FROM tasks WHERE status = 'resolved'",
+        );
+        defer stmt.finalize();
+
+        var count: usize = 0;
+        while (count < buf.len) {
+            const result = try stmt.step();
+            if (result != .row) break;
+            buf[count] = readUlid(&stmt, 0);
+            count += 1;
+        }
+        if (count == buf.len) {
+            const extra = try stmt.step();
+            if (extra == .row) {
+                std.log.warn("getResolvedTaskIds: buffer full ({d}), results truncated", .{buf.len});
+            }
+        }
+        return buf[0..count];
+    }
+
     // ── Ingest offset tracking ──
 
     pub fn getIngestOffset(self: *Store, file_name: []const u8) StoreError!usize {

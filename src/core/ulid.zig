@@ -86,6 +86,12 @@ pub const Ulid = struct {
         return std.mem.eql(u8, &a.bytes, &b.bytes);
     }
 
+    /// Format for use with std.fmt (e.g., `std.debug.print("{}", .{ulid})`).
+    pub fn format(self: Ulid, comptime _: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+        const encoded = self.encode();
+        try writer.writeAll(&encoded);
+    }
+
     fn decodeCrockford(ch: u8) ?u5 {
         return switch (ch) {
             '0', 'O', 'o' => 0,

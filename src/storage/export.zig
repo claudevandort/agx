@@ -45,7 +45,7 @@ pub fn exportTaskContext(
     const explorations = try store.getExplorationsByTask(task.id, &exp_buf);
     defer Exploration.deinitSlice(alloc, explorations);
 
-    try writeSummary(alloc, store, task, explorations, context_dir);
+    try writeSummary(alloc, task, explorations, context_dir);
     try writeSessionsJsonl(alloc, store, explorations, context_dir);
     try writeEvidenceJson(alloc, store, explorations, context_dir);
     try writeDecisionLog(alloc, store, explorations, context_dir);
@@ -68,7 +68,7 @@ pub fn exportExplorationContext(
     std.fs.cwd().makePath(context_dir) catch {};
 
     const exps = &[_]Exploration{exp.*};
-    try writeSummary(alloc, store, task, exps, context_dir);
+    try writeSummary(alloc, task, exps, context_dir);
     try writeSessionsJsonl(alloc, store, exps, context_dir);
     try writeEvidenceJson(alloc, store, exps, context_dir);
     try writeDecisionLog(alloc, store, exps, context_dir);
@@ -80,12 +80,10 @@ pub fn exportExplorationContext(
 
 fn writeSummary(
     alloc: Allocator,
-    store: *Store,
     task: *const Task,
     explorations: []const Exploration,
     context_dir: []const u8,
 ) !void {
-    _ = store;
     const path = try std.fmt.allocPrint(alloc, "{s}/summary.md", .{context_dir});
     defer alloc.free(path);
 
@@ -269,22 +267,25 @@ fn writeDecisionLog(
         const sessions = store.getSessionsByExploration(exp.id, &sess_buf) catch continue;
         defer Session.deinitSlice(alloc, sessions);
 
+        var header_written = false;
         for (sessions) |sess| {
             var ev_buf: [256]Event = undefined;
             const events = store.getEventsBySession(sess.id, "decision", &ev_buf) catch continue;
             defer Event.deinitSlice(alloc, events);
 
-            if (events.len > 0 and !has_decisions) {
-                has_decisions = true;
-            }
-
             for (events) |ev| {
-                try w.print("## Exploration [{d}]\n\n", .{exp.index});
+                if (!header_written) {
+                    try w.print("## Exploration [{d}]\n\n", .{exp.index});
+                    header_written = true;
+                    has_decisions = true;
+                }
                 if (ev.data) |d| {
                     try w.print("- {s}\n", .{d});
                 }
-                try w.print("\n", .{});
             }
+        }
+        if (header_written) {
+            try w.print("\n", .{});
         }
     }
 
