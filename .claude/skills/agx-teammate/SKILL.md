@@ -36,7 +36,18 @@ This is shown in `agx compare` and helps the orchestrator understand your strate
 
 Work on the task normally — edit files, run tests, make commits. You're in an isolated git worktree so your changes don't affect other explorations.
 
-### 3. Record evidence
+### 3. Record decisions
+
+When you make a significant choice — picking one approach over another, choosing a library, deciding to refactor vs patch — record it:
+```bash
+agx record --kind decision "Chose middleware chain over monolithic handler for testability"
+agx record --kind decision "Using existing config parser instead of adding a dependency"
+agx record --kind decision "Skipping migration — schema change is backward-compatible"
+```
+
+These feed into the decision log, which helps the orchestrator understand *why* you did what you did, not just *what* you did. Record decisions as you go — don't wait until the end.
+
+### 4. Record evidence
 
 After running tests or builds, record the results:
 ```bash
@@ -51,7 +62,7 @@ agx evidence --kind lint_result --status pass --summary "no linting errors"
 
 Always record evidence — it's how the orchestrator objectively compares explorations.
 
-### 4. Mark done and notify the lead
+### 5. Mark done and notify the lead
 
 When you've completed your work:
 ```bash
@@ -65,6 +76,7 @@ Make your done summary concrete — what changed and what's the evidence it work
 ## Important
 
 - **Declare approach early** — don't wait until you're done. The orchestrator may check `agx status` while you're still working.
+- **Record decisions as you go** — every significant choice (architecture, trade-offs, what you tried and rejected) should be a `agx record --kind decision` call. These are preserved in the decision log when context is exported.
 - **Record evidence** — explorations without evidence are hard to evaluate. Run the project's tests and record results.
 - **Commit your work** — `agx compare` uses git diff stats. Make sure your changes are committed.
 - **Write a clear done summary** — this is what the orchestrator reads when comparing explorations.

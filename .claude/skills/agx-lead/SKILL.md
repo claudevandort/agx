@@ -61,6 +61,13 @@ agx compare --format json     # machine-readable
 
 The comparison shows: files changed, lines added/removed, commit count, test pass/fail, build status, error count, approach, and summary. Use this to pick the best exploration.
 
+After deciding, record your reasoning so the decision log captures *why* you chose the winner:
+```bash
+agx record --kind decision "Keeping [2]: cleaner separation of concerns, all tests pass, fewer lines changed. [1] worked but coupled auth to routing. [3] had failing tests."
+```
+
+This is especially valuable when context is preserved — future agents can see not just what was tried but why one approach won.
+
 ## 5. Merge the winner
 
 ```bash
@@ -68,6 +75,8 @@ agx keep <index>                        # merge into base branch
 agx keep <index> --strategy squash      # squash merge
 agx keep <index> --preserve-context     # export context to .agx/context/
 ```
+
+Always use `--preserve-context` when the task involved non-trivial trade-offs — it exports the decision log, evidence, and session history for future reference.
 
 ## 6. Cleanup
 
