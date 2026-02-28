@@ -1,6 +1,6 @@
 ---
-name: agx-lead
-description: Use when orchestrating parallel agent explorations with agx. Handles spawning tasks, launching teammates in worktrees, monitoring progress, comparing results, and merging the best exploration.
+name: agx-explore-lead
+description: Use when orchestrating parallel agent explorations of a single task with agx. Spawns N competing approaches in worktrees, monitors progress, compares results, and merges the best exploration.
 ---
 
 # agx Lead
@@ -29,14 +29,14 @@ Use `TeamCreate` to create a team, then spawn one teammate per exploration using
 
 For each teammate:
 - Use `subagent_type: "general-purpose"` (they need to edit files)
-- Include `/agx-teammate` in their prompt so they know how to use agx
+- Include `/agx-explore-teammate` in their prompt so they know how to use agx
 - Tell them the task description, their exploration index, and worktree path
 
 Example teammate prompt:
 ```
 Your working directory is <worktree_path>.
 You are agx exploration [1]. Your task: "<task description>".
-Invoke /agx-teammate then work on the task.
+Invoke /agx-explore-teammate then work on the task.
 ```
 
 Launch all teammates in parallel (multiple Task tool calls in one message). Run them in the background so you can monitor progress.
@@ -94,3 +94,4 @@ Then shut down teammates and delete the team.
 - Run `agx compare` before deciding which to keep.
 - Use `agx archive` (not `discard`) for explorations with useful insights.
 - `agx keep` exports context by default — use `--no-context` to skip.
+- For **multiple independent tasks** (not competing approaches to the same task), use `/agx-batch-lead` instead.

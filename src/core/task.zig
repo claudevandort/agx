@@ -25,6 +25,7 @@ pub const Task = struct {
     base_branch: []const u8,
     status: TaskStatus,
     resolved_exploration_id: ?Ulid, // which exploration was kept
+    batch_id: ?Ulid, // if part of a batch
     created_at: i64, // ms since epoch
     updated_at: i64,
 };

@@ -58,9 +58,13 @@ Agent-aware version control layered on git. When multiple AI agents work the sam
 - Agent event files: `.git/agx/events/{session_id}.jsonl`
 - Session discovery: `.agx-session` file in each worktree root
 
-## Parallel Explorations
+## agx Skills
 
-To run parallel agent explorations of a task, invoke the `/agx-lead` skill. It contains full instructions on spawning explorations, launching agent teams, comparing results, and merging the winner.
+To manage multi-agent coding worklows use agx skills, these will cover cases when:
+
+- **`/agx-explore-lead`** — One task, N parallel explorations (competing approaches).
+  Spawn agents to try different approaches, compare results, merge the winner.
+- **`/agx-batch-lead`** — N independent tasks (where there might be code overlap), worked in parallel, merged sequentially.
 
 ## Zig 0.15 Notes
 

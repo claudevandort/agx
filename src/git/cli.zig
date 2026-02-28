@@ -188,6 +188,46 @@ pub const GitCli = struct {
         }
     }
 
+    // ── Conflict-aware merge primitives ──
+
+    pub const MergeResult = enum { clean, conflict };
+
+    /// Merge a branch without committing or fast-forwarding.
+    /// Returns .clean on success, .conflict if there are conflicts.
+    pub fn mergeNoCommit(self: *const GitCli, branch: []const u8) !MergeResult {
+        const result = try self.run(&.{ "merge", "--no-commit", "--no-ff", branch });
+        defer result.deinit(self.alloc);
+        if (result.success) return .clean;
+        // Exit code 1 with conflicts is expected; other failures are errors
+        if (result.stderr.len > 0) {
+            const trimmed = std.mem.trimRight(u8, result.stderr, "\n\r ");
+            // "Automatic merge failed" indicates conflicts, not a fatal error
+            if (std.mem.indexOf(u8, trimmed, "CONFLICT") != null or
+                std.mem.indexOf(u8, trimmed, "Automatic merge failed") != null)
+            {
+                return .conflict;
+            }
+        }
+        return .conflict;
+    }
+
+    /// Abort an in-progress merge.
+    pub fn mergeAbort(self: *const GitCli) !void {
+        const r = try self.runChecked(&.{ "merge", "--abort" });
+        r.deinit(self.alloc);
+    }
+
+    /// Commit the current staged merge result.
+    pub fn mergeCommit(self: *const GitCli, message: []const u8) !void {
+        const r = try self.runChecked(&.{ "commit", "-m", message });
+        r.deinit(self.alloc);
+    }
+
+    /// Get the list of conflicted file paths (newline-separated).
+    pub fn conflictedFiles(self: *const GitCli) ![]u8 {
+        return self.runTrimmed(&.{ "diff", "--name-only", "--diff-filter=U" });
+    }
+
     // ── Diff / Stats ──
 
     pub fn diffNumstat(self: *const GitCli, base: []const u8, head: []const u8) ![]u8 {

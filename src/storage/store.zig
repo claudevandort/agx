@@ -5,6 +5,9 @@ const migrations = @import("migrations.zig").migrations;
 const Ulid = @import("../core/ulid.zig").Ulid;
 const Task = @import("../core/task.zig").Task;
 const TaskStatus = @import("../core/task.zig").TaskStatus;
+const Batch = @import("../core/batch.zig").Batch;
+const BatchStatus = @import("../core/batch.zig").BatchStatus;
+const MergePolicy = @import("../core/batch.zig").MergePolicy;
 const Exploration = @import("../core/exploration.zig").Exploration;
 const ExplorationStatus = @import("../core/exploration.zig").ExplorationStatus;
 const Session = @import("../core/session.zig").Session;
@@ -113,7 +116,7 @@ pub const Store = struct {
 
     pub fn insertTask(self: *Store, task: Task) StoreError!void {
         var stmt = try self.db.prepare(
-            "INSERT INTO tasks (id, description, base_commit, base_branch, status, resolved_exploration_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO tasks (id, description, base_commit, base_branch, status, resolved_exploration_id, batch_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         );
         defer stmt.finalize();
         try stmt.bindBlob(1, &task.id.bytes);
@@ -122,15 +125,16 @@ pub const Store = struct {
         try stmt.bindText(4, task.base_branch);
         try stmt.bindText(5, task.status.toStr());
         try stmt.bindOptionalBlob(6, if (task.resolved_exploration_id) |r| &r.bytes else null);
-        try stmt.bindInt64(7, task.created_at);
-        try stmt.bindInt64(8, task.updated_at);
+        try stmt.bindOptionalBlob(7, if (task.batch_id) |b| &b.bytes else null);
+        try stmt.bindInt64(8, task.created_at);
+        try stmt.bindInt64(9, task.updated_at);
         _ = try stmt.step();
         self.indexEntity("task", task.id, task.id, task.description);
     }
 
     pub fn getTask(self: *Store, id: Ulid) StoreError!Task {
         var stmt = try self.db.prepare(
-            "SELECT id, description, base_commit, base_branch, status, resolved_exploration_id, created_at, updated_at FROM tasks WHERE id = ?1",
+            "SELECT id, description, base_commit, base_branch, status, resolved_exploration_id, batch_id, created_at, updated_at FROM tasks WHERE id = ?1",
         );
         defer stmt.finalize();
         try stmt.bindBlob(1, &id.bytes);
@@ -141,7 +145,7 @@ pub const Store = struct {
 
     pub fn getActiveTask(self: *Store) StoreError!Task {
         var stmt = try self.db.prepare(
-            "SELECT id, description, base_commit, base_branch, status, resolved_exploration_id, created_at, updated_at FROM tasks WHERE status = 'active' ORDER BY created_at DESC LIMIT 1",
+            "SELECT id, description, base_commit, base_branch, status, resolved_exploration_id, batch_id, created_at, updated_at FROM tasks WHERE status = 'active' ORDER BY created_at DESC LIMIT 1",
         );
         defer stmt.finalize();
         const result = try stmt.step();
@@ -163,6 +167,7 @@ pub const Store = struct {
 
     fn readTask(self: *Store, stmt: *sqlite.Stmt) StoreError!Task {
         const resolved_blob = stmt.columnBlob(5);
+        const batch_blob = stmt.columnBlob(6);
         return .{
             .id = readUlid(stmt, 0),
             .description = try self.dupeText(stmt.columnText(1)),
@@ -172,8 +177,11 @@ pub const Store = struct {
             .resolved_exploration_id = if (resolved_blob) |b| blk: {
                 break :blk if (b.len >= 16) Ulid{ .bytes = b[0..16].* } else null;
             } else null,
-            .created_at = stmt.columnInt64(6),
-            .updated_at = stmt.columnInt64(7),
+            .batch_id = if (batch_blob) |b| blk: {
+                break :blk if (b.len >= 16) Ulid{ .bytes = b[0..16].* } else null;
+            } else null,
+            .created_at = stmt.columnInt64(7),
+            .updated_at = stmt.columnInt64(8),
         };
     }
 
@@ -491,7 +499,7 @@ pub const Store = struct {
 
     pub fn getAllTasks(self: *Store, buf: []Task) StoreError![]Task {
         var stmt = try self.db.prepare(
-            "SELECT id, description, base_commit, base_branch, status, resolved_exploration_id, created_at, updated_at FROM tasks ORDER BY created_at DESC",
+            "SELECT id, description, base_commit, base_branch, status, resolved_exploration_id, batch_id, created_at, updated_at FROM tasks ORDER BY created_at DESC",
         );
         defer stmt.finalize();
 
@@ -717,6 +725,105 @@ pub const Store = struct {
         return stmt.columnInt64(0);
     }
 
+    // ── Batch CRUD ──
+
+    pub fn insertBatch(self: *Store, batch: Batch) StoreError!void {
+        var stmt = try self.db.prepare(
+            "INSERT INTO batches (id, description, base_commit, base_branch, status, merge_policy, merge_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        );
+        defer stmt.finalize();
+        try stmt.bindBlob(1, &batch.id.bytes);
+        try stmt.bindText(2, batch.description);
+        try stmt.bindText(3, batch.base_commit);
+        try stmt.bindText(4, batch.base_branch);
+        try stmt.bindText(5, batch.status.toStr());
+        try stmt.bindText(6, batch.merge_policy.toStr());
+        try stmt.bindOptionalText(7, batch.merge_order);
+        try stmt.bindInt64(8, batch.created_at);
+        try stmt.bindInt64(9, batch.updated_at);
+        _ = try stmt.step();
+    }
+
+    pub fn getBatch(self: *Store, id: Ulid) StoreError!Batch {
+        var stmt = try self.db.prepare(
+            "SELECT id, description, base_commit, base_branch, status, merge_policy, merge_order, created_at, updated_at FROM batches WHERE id = ?1",
+        );
+        defer stmt.finalize();
+        try stmt.bindBlob(1, &id.bytes);
+        const result = try stmt.step();
+        if (result != .row) return error.NotFound;
+        return self.readBatch(&stmt);
+    }
+
+    pub fn getActiveBatch(self: *Store) StoreError!Batch {
+        var stmt = try self.db.prepare(
+            "SELECT id, description, base_commit, base_branch, status, merge_policy, merge_order, created_at, updated_at FROM batches WHERE status = 'active' OR status = 'merging' ORDER BY created_at DESC LIMIT 1",
+        );
+        defer stmt.finalize();
+        const result = try stmt.step();
+        if (result != .row) return error.NotFound;
+        return self.readBatch(&stmt);
+    }
+
+    pub fn updateBatchStatus(self: *Store, id: Ulid, status: BatchStatus) StoreError!void {
+        var stmt = try self.db.prepare(
+            "UPDATE batches SET status = ?1, updated_at = ?2 WHERE id = ?3",
+        );
+        defer stmt.finalize();
+        try stmt.bindText(1, status.toStr());
+        try stmt.bindInt64(2, std.time.milliTimestamp());
+        try stmt.bindBlob(3, &id.bytes);
+        _ = try stmt.step();
+    }
+
+    pub fn updateBatchMergeOrder(self: *Store, id: Ulid, merge_order: []const u8) StoreError!void {
+        var stmt = try self.db.prepare(
+            "UPDATE batches SET merge_order = ?1, updated_at = ?2 WHERE id = ?3",
+        );
+        defer stmt.finalize();
+        try stmt.bindText(1, merge_order);
+        try stmt.bindInt64(2, std.time.milliTimestamp());
+        try stmt.bindBlob(3, &id.bytes);
+        _ = try stmt.step();
+    }
+
+    pub fn getTasksByBatch(self: *Store, batch_id: Ulid, buf: []Task) StoreError![]Task {
+        var stmt = try self.db.prepare(
+            "SELECT id, description, base_commit, base_branch, status, resolved_exploration_id, batch_id, created_at, updated_at FROM tasks WHERE batch_id = ?1 ORDER BY created_at",
+        );
+        defer stmt.finalize();
+        try stmt.bindBlob(1, &batch_id.bytes);
+
+        var count: usize = 0;
+        while (count < buf.len) {
+            const result = try stmt.step();
+            if (result != .row) break;
+            buf[count] = try self.readTask(&stmt);
+            count += 1;
+        }
+        if (count == buf.len) {
+            const extra = try stmt.step();
+            if (extra == .row) {
+                std.log.warn("getTasksByBatch: buffer full ({d}), results truncated", .{buf.len});
+            }
+        }
+        return buf[0..count];
+    }
+
+    fn readBatch(self: *Store, stmt: *sqlite.Stmt) StoreError!Batch {
+        return .{
+            .id = readUlid(stmt, 0),
+            .description = try self.dupeText(stmt.columnText(1)),
+            .base_commit = try self.dupeText(stmt.columnText(2)),
+            .base_branch = try self.dupeText(stmt.columnText(3)),
+            .status = BatchStatus.fromStr(stmt.columnText(4) orelse "active") catch .active,
+            .merge_policy = MergePolicy.fromStr(stmt.columnText(5) orelse "semi") catch .semi,
+            .merge_order = try self.dupeOptionalText(stmt.columnText(6)),
+            .created_at = stmt.columnInt64(7),
+            .updated_at = stmt.columnInt64(8),
+        };
+    }
+
     // ── Snapshot CRUD ──
 
     pub fn insertSnapshot(self: *Store, snap: Snapshot) StoreError!void {
@@ -757,6 +864,7 @@ test "task roundtrip" {
         .base_branch = "main",
         .status = .active,
         .resolved_exploration_id = null,
+        .batch_id = null,
         .created_at = now,
         .updated_at = now,
     };
@@ -782,6 +890,7 @@ test "exploration roundtrip" {
         .base_branch = "main",
         .status = .active,
         .resolved_exploration_id = null,
+        .batch_id = null,
         .created_at = now,
         .updated_at = now,
     });
@@ -821,6 +930,7 @@ test "FTS search" {
         .base_branch = "main",
         .status = .active,
         .resolved_exploration_id = null,
+        .batch_id = null,
         .created_at = now,
         .updated_at = now,
     });
@@ -883,6 +993,7 @@ test "incremental FTS indexing" {
         .base_branch = "main",
         .status = .active,
         .resolved_exploration_id = null,
+        .batch_id = null,
         .created_at = now,
         .updated_at = now,
     });
@@ -909,6 +1020,7 @@ test "evidence roundtrip" {
         .base_branch = "main",
         .status = .active,
         .resolved_exploration_id = null,
+        .batch_id = null,
         .created_at = now,
         .updated_at = now,
     });
@@ -942,4 +1054,96 @@ test "evidence roundtrip" {
     const evs = try store.getEvidenceByExploration(exp_id, &buf);
     try std.testing.expectEqual(@as(usize, 1), evs.len);
     try std.testing.expectEqualSlices(u8, "47/47 tests passed", evs[0].summary.?);
+}
+
+test "batch and getTasksByBatch" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var store = try Store.init(arena.allocator(), ":memory:");
+    defer store.deinit();
+
+    const now = std.time.milliTimestamp();
+    const batch_id = Ulid.new();
+
+    try store.insertBatch(.{
+        .id = batch_id,
+        .description = "Batch of 2 tasks",
+        .base_commit = "abc123",
+        .base_branch = "main",
+        .status = .active,
+        .merge_policy = .semi,
+        .merge_order = null,
+        .created_at = now,
+        .updated_at = now,
+    });
+
+    // Create two tasks in the batch
+    const task1_id = Ulid.new();
+    try store.insertTask(.{
+        .id = task1_id,
+        .description = "add auth",
+        .base_commit = "abc123",
+        .base_branch = "main",
+        .status = .active,
+        .resolved_exploration_id = null,
+        .batch_id = batch_id,
+        .created_at = now,
+        .updated_at = now,
+    });
+
+    const task2_id = Ulid.new();
+    try store.insertTask(.{
+        .id = task2_id,
+        .description = "add logging",
+        .base_commit = "abc123",
+        .base_branch = "main",
+        .status = .active,
+        .resolved_exploration_id = null,
+        .batch_id = batch_id,
+        .created_at = now + 1,
+        .updated_at = now + 1,
+    });
+
+    // Also create a task NOT in the batch
+    try store.insertTask(.{
+        .id = Ulid.new(),
+        .description = "unrelated task",
+        .base_commit = "abc123",
+        .base_branch = "main",
+        .status = .active,
+        .resolved_exploration_id = null,
+        .batch_id = null,
+        .created_at = now,
+        .updated_at = now,
+    });
+
+    // Verify batch roundtrip
+    const got_batch = try store.getBatch(batch_id);
+    try std.testing.expectEqualSlices(u8, "Batch of 2 tasks", got_batch.description);
+    try std.testing.expectEqual(BatchStatus.active, got_batch.status);
+    try std.testing.expectEqual(MergePolicy.semi, got_batch.merge_policy);
+
+    // Verify getTasksByBatch returns only the 2 batch tasks
+    var task_buf: [16]Task = undefined;
+    const tasks = try store.getTasksByBatch(batch_id, &task_buf);
+    try std.testing.expectEqual(@as(usize, 2), tasks.len);
+    try std.testing.expectEqualSlices(u8, "add auth", tasks[0].description);
+    try std.testing.expectEqualSlices(u8, "add logging", tasks[1].description);
+
+    // Verify batch_id is set on retrieved tasks
+    try std.testing.expect(tasks[0].batch_id != null);
+
+    // Verify getActiveBatch works
+    const active = try store.getActiveBatch();
+    try std.testing.expectEqualSlices(u8, "Batch of 2 tasks", active.description);
+
+    // Update status and verify
+    try store.updateBatchStatus(batch_id, .completed);
+    const updated = try store.getBatch(batch_id);
+    try std.testing.expectEqual(BatchStatus.completed, updated.status);
+
+    // Update merge order
+    try store.updateBatchMergeOrder(batch_id, "[\"id1\",\"id2\"]");
+    const with_order = try store.getBatch(batch_id);
+    try std.testing.expectEqualSlices(u8, "[\"id1\",\"id2\"]", with_order.merge_order.?);
 }

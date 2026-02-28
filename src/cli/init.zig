@@ -5,22 +5,26 @@ const skill_files = @import("skill_files");
 
 const claude_md_section =
     \\
-    \\## Parallel Explorations
+    \\## agx Skills
     \\
-    \\To run parallel agent explorations of a task, invoke the `/agx-lead` skill.
-    \\It contains full instructions on spawning explorations, launching agent teams,
-    \\comparing results, and merging the winner.
+    \\To manage multi-agent coding worklows use agx skills, these will cover cases when:
+    \\
+    \\- **`/agx-explore-lead`** — One task, N parallel explorations (competing approaches).
+    \\  Spawn agents to try different approaches, compare results, merge the winner.
+    \\- **`/agx-batch-lead`** — N independent tasks (where there might be code overlap), worked in parallel, merged sequentially.
     \\
 ;
 
 const claude_md_full =
     \\# CLAUDE.md
     \\
-    \\## Parallel Explorations
+    \\## agx Skills
     \\
-    \\To run parallel agent explorations of a task, invoke the `/agx-lead` skill.
-    \\It contains full instructions on spawning explorations, launching agent teams,
-    \\comparing results, and merging the winner.
+    \\To manage multi-agent coding worklows use agx skills, these will cover cases when:
+    \\
+    \\- **`/agx-explore-lead`** — One task, N parallel explorations (competing approaches).
+    \\  Spawn agents to try different approaches, compare results, merge the winner.
+    \\- **`/agx-batch-lead`** — N independent tasks (where there might be code overlap), worked in parallel, merged sequentially.
     \\
 ;
 
@@ -83,12 +87,16 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     };
 
     // Create skill files
-    createSkillFile(aa, repo_root, "agx-lead", skill_files.agx_lead, stdout) catch |err| {
-        try stderr.print("warning: could not create agx-lead skill: {s}\n", .{@errorName(err)});
+    createSkillFile(aa, repo_root, "agx-explore-lead", skill_files.agx_explore_lead, stdout) catch |err| {
+        try stderr.print("warning: could not create agx-explore-lead skill: {s}\n", .{@errorName(err)});
         try stderr.flush();
     };
-    createSkillFile(aa, repo_root, "agx-teammate", skill_files.agx_teammate, stdout) catch |err| {
-        try stderr.print("warning: could not create agx-teammate skill: {s}\n", .{@errorName(err)});
+    createSkillFile(aa, repo_root, "agx-explore-teammate", skill_files.agx_explore_teammate, stdout) catch |err| {
+        try stderr.print("warning: could not create agx-explore-teammate skill: {s}\n", .{@errorName(err)});
+        try stderr.flush();
+    };
+    createSkillFile(aa, repo_root, "agx-batch-lead", skill_files.agx_batch_lead, stdout) catch |err| {
+        try stderr.print("warning: could not create agx-batch-lead skill: {s}\n", .{@errorName(err)});
         try stderr.flush();
     };
 
@@ -153,7 +161,9 @@ fn createOrUpdateClaudeMd(alloc: Allocator, repo_root: []const u8, stdout: *std.
     };
 
     // File exists — check if it already has agx content
-    if (std.mem.indexOf(u8, existing, "agx-lead") != null) {
+    if (std.mem.indexOf(u8, existing, "agx-explore-lead") != null or
+        std.mem.indexOf(u8, existing, "agx Skills") != null)
+    {
         return;
     }
 

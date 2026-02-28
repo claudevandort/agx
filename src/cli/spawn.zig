@@ -77,6 +77,7 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         .base_branch = base_branch,
         .status = .active,
         .resolved_exploration_id = null,
+        .batch_id = null,
         .created_at = now,
         .updated_at = now,
     });

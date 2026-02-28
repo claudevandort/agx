@@ -1,5 +1,5 @@
 ---
-name: agx-teammate
+name: agx-explore-teammate
 description: Use when working as a teammate agent inside an agx exploration worktree. Guides you through discovering your session, declaring your approach, recording evidence, and completing your exploration.
 ---
 

@@ -98,4 +98,21 @@ pub const migrations = [_][]const u8{
     \\);
     \\
     ,
+    // Migration 4: Batch entity + batch_id on tasks
+    \\CREATE TABLE IF NOT EXISTS batches (
+    \\    id BLOB PRIMARY KEY,
+    \\    description TEXT NOT NULL,
+    \\    base_commit TEXT NOT NULL,
+    \\    base_branch TEXT NOT NULL,
+    \\    status TEXT NOT NULL DEFAULT 'active',
+    \\    merge_policy TEXT NOT NULL DEFAULT 'semi',
+    \\    merge_order TEXT,
+    \\    created_at INTEGER NOT NULL,
+    \\    updated_at INTEGER NOT NULL
+    \\);
+    \\
+    \\ALTER TABLE tasks ADD COLUMN batch_id BLOB REFERENCES batches(id);
+    \\CREATE INDEX IF NOT EXISTS idx_tasks_batch ON tasks(batch_id);
+    \\
+    ,
 };

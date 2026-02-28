@@ -7,13 +7,14 @@ Git tracks file snapshots but has no concept of agent sessions, parallel explora
 ## Data Model
 
 ```
-Task (1) ──< Exploration (1) ──< Session (1) ──< Event
-                                     │
-                                     ├──< Snapshot
-                                     └──< Evidence
+Batch (1) ──< Task (1) ──< Exploration (1) ──< Session (1) ──< Event
+                                                     │
+                                                     ├──< Snapshot
+                                                     └──< Evidence
 ```
 
-- **Task** — a unit of work (description, base_commit, base_branch, status, resolved_session)
+- **Batch** — a group of independent tasks to be worked in parallel and merged sequentially (description, base_commit, base_branch, status, merge_policy, merge_order)
+- **Task** — a unit of work (description, base_commit, base_branch, status, resolved_session, batch_id?)
 - **Exploration** — one agent's attempt at a task (worktree_path, branch_name, index, status, approach)
   - `approach` — strategic description set early (e.g., "middleware extraction" vs "service split"), distinct from `done --summary` which captures the outcome. Shown in `agx status` and `agx compare` even before the exploration is finished.
 - **Session** — agent working context within an exploration (agent_type, model_version, environment_fingerprint, initial_prompt, timestamps, exit_reason)
@@ -72,8 +73,8 @@ SQLite for the hot path (thousands of events per session, concurrent writes). JS
 
 ## Git Integration
 
-- **Branches**: `agx/{task_id_short}/{exploration_index}` (e.g., `agx/01JK7M/2`)
-- **Worktrees**: `.git/agx/worktrees/{task_id_short}/{idx}/`
+- **Branches**: `agx/{task_id_short}/{exploration_index}` (e.g., `agx/01JK7M/2`) for explorations, `agx/batch-{batch_short}/{task_index}` for batch tasks
+- **Worktrees**: `.git/agx/worktrees/{task_id_short}/{idx}/` for explorations, `.git/agx/worktrees/batch-{batch_short}/{idx}/` for batch tasks
 - **Implementation**: Shell out to `git` via `std.process.Child` (worktree ops don't have clean libgit2 equivalents; preserves user's git config/hooks). Wrap in a `GitCli` abstraction for future swap to libgit2.
 - **Merge strategies**: merge (default), rebase, squash, cherry-pick
 
@@ -87,6 +88,8 @@ AGX-Exploration: 2
 AGX-Agent: claude-code
 AGX-Model: claude-sonnet-4-20250514
 ```
+
+Batch merges add `AGX-Batch` and `AGX-Task` trailers to each merge commit.
 
 Trailers are the lightest possible way to preserve provenance in permanent git history. They survive rebases, work with every forge, show up in `git log`, and cost nothing. After agx metadata is cleaned up, the trailers remain as a permanent audit trail of which agent produced which code.
 
@@ -138,6 +141,36 @@ agx discard 1                         # remove one exploration (no context prese
 agx clean                             # remove all resolved task artifacts
 ```
 
+## CLI Commands — Batch Workflow
+
+```bash
+# Create a batch of independent tasks
+agx batch create --tasks "add auth" "add logging" "refactor config" --policy semi
+agx batch create --tasks "task A" "task B" --policy autonomous --base main~2
+
+# Monitor batch progress
+agx batch status                      # batch info + per-task table
+agx batch status --batch <id>         # specific batch
+
+# Preview merge order and file overlap
+agx batch merge --dry-run
+
+# Execute sequential merge (least-conflict-first ordering)
+agx batch merge
+```
+
+### Merge policies
+
+- **`autonomous`** — the lead agent resolves all merge conflicts
+- **`semi`** — lead resolves trivial conflicts, asks user for complex ones
+- **`manual`** — every conflict goes to the user
+
+### `agx batch` vs `agx spawn`
+
+`agx spawn` creates N explorations of **the same task** (competing approaches) — you pick one winner with `agx keep`.
+
+`agx batch create` creates N **different tasks** (independent work) — all get merged together sequentially with conflict-aware ordering.
+
 ### `agx archive` vs `agx discard`
 
 `agx archive` exports an exploration's session logs, evidence, and decision history to `.agx/context/` before removing the worktree — preserving the reasoning and results from explorations you didn't pick. The exploration branch remains in git as an orphan ref. This supports the principle that abandoned explorations are valuable context, not garbage.
@@ -181,8 +214,9 @@ agx/
   build.zig.zon
   src/
     main.zig                     # Entry point, CLI dispatch
-    cli/                         # One file per command (spawn.zig, compare.zig, keep.zig, ...)
-    core/                        # Entities (task.zig, exploration.zig, session.zig, event.zig, evidence.zig, ulid.zig)
+    cli/                         # One file per command (spawn.zig, compare.zig, keep.zig, batch.zig, ...)
+    core/                        # Entities (task.zig, exploration.zig, session.zig, event.zig, evidence.zig, batch.zig, ulid.zig)
+    batch/                       # Batch-specific logic (overlap.zig — file overlap analysis + merge ordering)
     storage/                     # sqlite.zig, migrations.zig, export.zig
     git/                         # cli_backend.zig, worktree.zig, diff.zig, branch.zig, trailers.zig
     compare/                     # metrics.zig, diff_analyzer.zig, renderer.zig
@@ -207,6 +241,7 @@ agx/
 9. **daemon/ + agent integration** — event ingestion (file-based first, then socket)
 10. **cli/record.zig + cli/log.zig** — event recording and viewing
 11. **export to .agx/context/** — context preservation
+11b. **batch/ + cli/batch.zig** — multi-task batch execution with conflict-aware merging (Batch entity, overlap analysis, sequential merge)
 
 ## Verification
 
@@ -220,17 +255,25 @@ agx/
 
 Test agx with real agents using Claude Code skills — no agx code changes needed:
 
-- **`agx-lead` skill** — for the team lead agent. Instructions on how to:
+- **`agx-explore-lead` skill** — for the team lead agent (parallel explorations). Instructions on how to:
   - `agx init` and `agx spawn` to set up parallel explorations
   - Launch teammates in the spawned worktrees
   - Monitor with `agx status` and `agx compare`
   - Pick the winner with `agx keep`, clean up with `agx archive`/`agx discard`/`agx clean`
 
-- **`agx-teammate` skill** — for each teammate agent working in a worktree. Instructions on how to:
+- **`agx-explore-teammate` skill** — for each teammate agent working in a worktree. Instructions on how to:
   - Read `.agx-session` to discover session/exploration context
   - `agx approach "..."` to declare strategy early
   - `agx evidence` to record test/build results
   - `agx done --summary "..."` when finished
+
+- **`agx-batch-lead` skill** — for the team lead agent (multi-task batch). Instructions on how to:
+  - `agx batch create` to create a batch of independent tasks with worktrees
+  - Launch teammates (one per task) using the `agx-explore-teammate` skill
+  - Monitor with `agx batch status`
+  - `agx batch merge --dry-run` to preview merge order and file overlap
+  - `agx batch merge` to execute sequential merge with conflict-aware ordering
+  - Handle conflicts per merge policy (autonomous/manual)
 
 ### 13. Orchestrator command (`agx spawn --run`)
 
