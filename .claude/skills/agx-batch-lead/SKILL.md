@@ -107,15 +107,25 @@ This will:
 
 ### Conflict resolution
 
-If a merge has conflicts, then you must ask the user what policy to take, the options are autonomous or manual:
+**MANDATORY**: When a merge has conflicts, you MUST stop and ask the user before resolving. Do NOT resolve conflicts silently — even if they look trivial. Use AskUserQuestion every time.
 
-**autonomous**: Read the conflicted files, understand both tasks' intent from their approach/evidence, edit files to resolve, then:
+For each conflicted merge step:
+
+1. Show the user which files have conflicts and a brief summary of what both sides changed
+2. Ask the user using AskUserQuestion with these options:
+   - **"Autonomous"** — you read the conflicted files, understand both tasks' intent, resolve the conflicts, and commit
+   - **"Manual"** — you show the full conflict markers to the user and wait for them to resolve and tell you when done
+3. Only proceed with resolution after the user responds
+
+Do NOT batch multiple conflict resolutions into a single question — ask per merge step so the user can choose differently for each one.
+
+**After autonomous resolution**: Read the conflicted files, understand both tasks' intent from their approach/evidence, edit files to resolve, then:
 ```bash
 git add <resolved files>
 git commit -m "agx batch merge: <task description>"
 ```
 
-**manual**: Show all conflicts to the user and wait for them to resolve.
+**After manual resolution**: Show all conflict markers to the user and wait for them to tell you they've resolved them.
 
 ## 6. Export context
 
