@@ -45,6 +45,13 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    // --- Embedded skill files (rooted at project root for @embedFile) ---
+    const skill_embed_mod = b.createModule(.{
+        .root_source_file = b.path("skill_embed.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     // --- Main executable ---
     const exe = b.addExecutable(.{
         .name = "agx",
@@ -55,6 +62,7 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "sqlite", .module = sqlite_mod },
                 .{ .name = "agx", .module = agx_mod },
+                .{ .name = "skill_files", .module = skill_embed_mod },
             },
         }),
     });
