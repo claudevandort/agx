@@ -87,4 +87,15 @@ pub const migrations = [_][]const u8{
     \\CREATE UNIQUE INDEX IF NOT EXISTS idx_explorations_task_idx ON explorations(task_id, idx);
     \\
     ,
+    // Migration 3: FTS5 full-text search index
+    \\CREATE VIRTUAL TABLE IF NOT EXISTS context_fts USING fts5(
+    \\    entity_type,
+    \\    entity_id UNINDEXED,
+    \\    task_id UNINDEXED,
+    \\    source UNINDEXED,
+    \\    content,
+    \\    tokenize='porter unicode61'
+    \\);
+    \\
+    ,
 };

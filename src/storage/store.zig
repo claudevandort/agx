@@ -125,6 +125,7 @@ pub const Store = struct {
         try stmt.bindInt64(7, task.created_at);
         try stmt.bindInt64(8, task.updated_at);
         _ = try stmt.step();
+        self.indexEntity("task", task.id, task.id, task.description);
     }
 
     pub fn getTask(self: *Store, id: Ulid) StoreError!Task {
@@ -241,6 +242,16 @@ pub const Store = struct {
         try stmt.bindInt64(3, std.time.milliTimestamp());
         try stmt.bindBlob(4, &id.bytes);
         _ = try stmt.step();
+        // Index summary into FTS — need task_id from DB
+        if (summary) |s| {
+            var lookup = self.db.prepare("SELECT task_id FROM explorations WHERE id = ?1") catch return;
+            defer lookup.finalize();
+            lookup.bindBlob(1, &id.bytes) catch return;
+            if ((lookup.step() catch return) == .row) {
+                const task_id = readUlid(&lookup, 0);
+                self.indexEntity("exploration", id, task_id, s);
+            }
+        }
     }
 
     pub fn updateExplorationApproach(self: *Store, id: Ulid, approach: []const u8) StoreError!void {
@@ -252,6 +263,14 @@ pub const Store = struct {
         try stmt.bindInt64(2, std.time.milliTimestamp());
         try stmt.bindBlob(3, &id.bytes);
         _ = try stmt.step();
+        // Index approach into FTS — need task_id from DB
+        var lookup = self.db.prepare("SELECT task_id FROM explorations WHERE id = ?1") catch return;
+        defer lookup.finalize();
+        lookup.bindBlob(1, &id.bytes) catch return;
+        if ((lookup.step() catch return) == .row) {
+            const task_id = readUlid(&lookup, 0);
+            self.indexEntity("exploration", id, task_id, approach);
+        }
     }
 
     fn readExploration(self: *Store, stmt: *sqlite.Stmt) StoreError!Exploration {
@@ -424,6 +443,16 @@ pub const Store = struct {
         try stmt.bindOptionalText(7, ev.raw_path);
         try stmt.bindInt64(8, ev.recorded_at);
         _ = try stmt.step();
+        // Index evidence summary into FTS
+        if (ev.summary) |s| {
+            var lookup = self.db.prepare("SELECT task_id FROM explorations WHERE id = ?1") catch return;
+            defer lookup.finalize();
+            lookup.bindBlob(1, &ev.exploration_id.bytes) catch return;
+            if ((lookup.step() catch return) == .row) {
+                const task_id = readUlid(&lookup, 0);
+                self.indexEntity("evidence", ev.id, task_id, s);
+            }
+        }
     }
 
     pub fn getEvidenceByExploration(self: *Store, exploration_id: Ulid, buf: []Evidence) StoreError![]Evidence {
@@ -526,6 +555,168 @@ pub const Store = struct {
         _ = try stmt.step();
     }
 
+    // ── FTS5 full-text search ──
+
+    pub const SearchResult = struct {
+        entity_type: []const u8,
+        entity_id: []const u8,
+        task_id: []const u8,
+        snippet: []const u8,
+        rank: f64,
+    };
+
+    /// Full-text search across the context_fts index. Returns ranked results with snippets.
+    pub fn searchFts(self: *Store, query: []const u8, buf: []SearchResult) StoreError![]SearchResult {
+        var stmt = try self.db.prepare(
+            "SELECT entity_type, entity_id, task_id, snippet(context_fts, 4, '\xc2\xbb', '\xc2\xab', '\xe2\x80\xa6', 24), rank FROM context_fts WHERE context_fts MATCH ?1 ORDER BY rank LIMIT ?2",
+        );
+        defer stmt.finalize();
+        try stmt.bindText(1, query);
+        try stmt.bindInt(2, @intCast(buf.len));
+
+        var count: usize = 0;
+        while (count < buf.len) {
+            const result = try stmt.step();
+            if (result != .row) break;
+            buf[count] = .{
+                .entity_type = try self.dupeText(stmt.columnText(0)),
+                .entity_id = try self.dupeText(stmt.columnText(1)),
+                .task_id = try self.dupeText(stmt.columnText(2)),
+                .snippet = try self.dupeText(stmt.columnText(3)),
+                .rank = stmt.columnDouble(4),
+            };
+            count += 1;
+        }
+        return buf[0..count];
+    }
+
+    /// Insert a single entity into the FTS index. Silently ignores failures
+    /// (e.g., FTS table doesn't exist in old DBs).
+    fn indexEntity(self: *Store, entity_type: []const u8, entity_id: Ulid, task_id: Ulid, content: []const u8) void {
+        if (content.len == 0) return;
+        var stmt = self.db.prepare(
+            "INSERT INTO context_fts (entity_type, entity_id, task_id, source, content) VALUES (?1, ?2, ?3, 'db', ?4)",
+        ) catch return;
+        defer stmt.finalize();
+        const eid = entity_id.encode();
+        const tid = task_id.encode();
+        stmt.bindText(1, entity_type) catch return;
+        stmt.bindText(2, &eid) catch return;
+        stmt.bindText(3, &tid) catch return;
+        stmt.bindText(4, content) catch return;
+        _ = stmt.step() catch return;
+    }
+
+    /// Rebuild the FTS index from all DB data (tasks, explorations, evidence).
+    pub fn indexForSearch(self: *Store) StoreError!void {
+        try self.db.exec("BEGIN");
+        errdefer self.db.exec("ROLLBACK") catch {};
+
+        try self.db.exec("DELETE FROM context_fts WHERE source = 'db'");
+
+        // Index tasks
+        {
+            var stmt = try self.db.prepare("SELECT id, description FROM tasks");
+            defer stmt.finalize();
+            while (true) {
+                const result = try stmt.step();
+                if (result != .row) break;
+                const id = readUlid(&stmt, 0);
+                const desc = stmt.columnText(1) orelse continue;
+                self.indexEntity("task", id, id, desc);
+            }
+        }
+
+        // Index explorations (approach + summary as separate rows)
+        {
+            var stmt = try self.db.prepare("SELECT id, task_id, approach, summary FROM explorations");
+            defer stmt.finalize();
+            while (true) {
+                const result = try stmt.step();
+                if (result != .row) break;
+                const id = readUlid(&stmt, 0);
+                const task_id = readUlid(&stmt, 1);
+                if (stmt.columnText(2)) |approach| {
+                    self.indexEntity("exploration", id, task_id, approach);
+                }
+                if (stmt.columnText(3)) |summary| {
+                    self.indexEntity("exploration", id, task_id, summary);
+                }
+            }
+        }
+
+        // Index evidence
+        {
+            var stmt = try self.db.prepare(
+                "SELECT ev.id, e.task_id, ev.summary FROM evidence ev JOIN explorations e ON ev.exploration_id = e.id",
+            );
+            defer stmt.finalize();
+            while (true) {
+                const result = try stmt.step();
+                if (result != .row) break;
+                const id = readUlid(&stmt, 0);
+                const task_id = readUlid(&stmt, 1);
+                if (stmt.columnText(2)) |summary| {
+                    self.indexEntity("evidence", id, task_id, summary);
+                }
+            }
+        }
+
+        try self.db.exec("COMMIT");
+    }
+
+    /// Index shared .agx/context/ files into the FTS index with source='file'.
+    pub fn indexContextFiles(self: *Store, context_dir: []const u8) StoreError!void {
+        try self.db.exec("DELETE FROM context_fts WHERE source = 'file'");
+
+        const fm_mod = @import("../util/frontmatter.zig");
+
+        var dir = std.fs.cwd().openDir(context_dir, .{ .iterate = true }) catch return;
+        defer dir.close();
+
+        var iter = dir.iterate();
+        while (iter.next() catch return) |entry| {
+            if (entry.kind != .directory) continue;
+
+            const summary_path = std.fmt.allocPrint(self.alloc, "{s}/{s}/summary.md", .{ context_dir, entry.name }) catch continue;
+            const content = std.fs.cwd().readFileAlloc(self.alloc, summary_path, 1024 * 1024) catch continue;
+            const parsed = fm_mod.parseFrontmatter(content);
+
+            const task_id_str = parsed.fm.task_id orelse entry.name;
+
+            // Index the description
+            if (parsed.fm.description) |desc| {
+                var stmt = self.db.prepare(
+                    "INSERT INTO context_fts (entity_type, entity_id, task_id, source, content) VALUES ('task', ?1, ?1, 'file', ?2)",
+                ) catch continue;
+                defer stmt.finalize();
+                stmt.bindText(1, task_id_str) catch continue;
+                stmt.bindText(2, desc) catch continue;
+                _ = stmt.step() catch continue;
+            }
+
+            // Index the body content
+            const body = content[parsed.body_start..];
+            if (body.len > 0) {
+                var stmt = self.db.prepare(
+                    "INSERT INTO context_fts (entity_type, entity_id, task_id, source, content) VALUES ('context', ?1, ?1, 'file', ?2)",
+                ) catch continue;
+                defer stmt.finalize();
+                stmt.bindText(1, task_id_str) catch continue;
+                stmt.bindText(2, body) catch continue;
+                _ = stmt.step() catch continue;
+            }
+        }
+    }
+
+    /// Count the total number of rows in the FTS index.
+    pub fn countFtsEntries(self: *Store) StoreError!i64 {
+        var stmt = try self.db.prepare("SELECT COUNT(*) FROM context_fts");
+        defer stmt.finalize();
+        _ = try stmt.step();
+        return stmt.columnInt64(0);
+    }
+
     // ── Snapshot CRUD ──
 
     pub fn insertSnapshot(self: *Store, snap: Snapshot) StoreError!void {
@@ -613,6 +804,94 @@ test "exploration roundtrip" {
     const exps = try store.getExplorationsByTask(task_id, &buf);
     try std.testing.expectEqual(@as(usize, 1), exps.len);
     try std.testing.expectEqualSlices(u8, "middleware extraction", exps[0].approach.?);
+}
+
+test "FTS search" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var store = try Store.init(arena.allocator(), ":memory:");
+    defer store.deinit();
+
+    const now = std.time.milliTimestamp();
+    const task_id = Ulid.new();
+    try store.insertTask(.{
+        .id = task_id,
+        .description = "refactor authentication middleware",
+        .base_commit = "abc",
+        .base_branch = "main",
+        .status = .active,
+        .resolved_exploration_id = null,
+        .created_at = now,
+        .updated_at = now,
+    });
+
+    const exp_id = Ulid.new();
+    try store.insertExploration(.{
+        .id = exp_id,
+        .task_id = task_id,
+        .index = 1,
+        .worktree_path = "/tmp/wt1",
+        .branch_name = "agx/ABC/1",
+        .status = .active,
+        .approach = "extract JWT validation into separate module",
+        .summary = null,
+        .created_at = now,
+        .updated_at = now,
+    });
+
+    try store.insertEvidence(.{
+        .id = Ulid.new(),
+        .exploration_id = exp_id,
+        .kind = .test_result,
+        .status = .pass,
+        .hash = null,
+        .summary = "all authentication tests passing",
+        .raw_path = null,
+        .recorded_at = now,
+    });
+
+    // Rebuild full index
+    try store.indexForSearch();
+
+    // Search for "authentication" — should find task + evidence
+    var buf: [10]Store.SearchResult = undefined;
+    const results = try store.searchFts("authentication", &buf);
+    try std.testing.expect(results.len >= 2);
+
+    // Search for "JWT" — should find exploration approach
+    const jwt_results = try store.searchFts("JWT", &buf);
+    try std.testing.expect(jwt_results.len >= 1);
+    try std.testing.expectEqualSlices(u8, "exploration", jwt_results[0].entity_type);
+
+    // Search for something not indexed
+    const no_results = try store.searchFts("nonexistent", &buf);
+    try std.testing.expectEqual(@as(usize, 0), no_results.len);
+}
+
+test "incremental FTS indexing" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var store = try Store.init(arena.allocator(), ":memory:");
+    defer store.deinit();
+
+    const now = std.time.milliTimestamp();
+    const task_id = Ulid.new();
+    try store.insertTask(.{
+        .id = task_id,
+        .description = "implement websocket support",
+        .base_commit = "def456",
+        .base_branch = "main",
+        .status = .active,
+        .resolved_exploration_id = null,
+        .created_at = now,
+        .updated_at = now,
+    });
+
+    // Task should be searchable immediately (incremental index)
+    var buf: [10]Store.SearchResult = undefined;
+    const results = try store.searchFts("websocket", &buf);
+    try std.testing.expectEqual(@as(usize, 1), results.len);
+    try std.testing.expectEqualSlices(u8, "task", results[0].entity_type);
 }
 
 test "evidence roundtrip" {
