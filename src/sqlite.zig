@@ -93,6 +93,10 @@ pub const Db = struct {
     pub fn changes(self: *Db) i32 {
         return c.sqlite3_changes(self.handle);
     }
+
+    pub fn errmsg(self: *Db) [*:0]const u8 {
+        return c.sqlite3_errmsg(self.handle) orelse "unknown error";
+    }
 };
 
 /// Prepared statement wrapper.

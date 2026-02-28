@@ -127,6 +127,14 @@ pub const GitCli = struct {
         r.deinit(self.alloc);
     }
 
+    pub fn branchExists(self: *const GitCli, name: []const u8) !void {
+        const full_ref = try std.fmt.allocPrint(self.alloc, "refs/heads/{s}", .{name});
+        defer self.alloc.free(full_ref);
+        const r = try self.run(&.{ "show-ref", "--verify", "--quiet", full_ref });
+        defer r.deinit(self.alloc);
+        if (!r.success) return error.GitCommandFailed;
+    }
+
     // ── Worktree operations ──
 
     /// Add a new worktree at `path`, creating branch `branch`.

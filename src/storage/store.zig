@@ -809,6 +809,48 @@ pub const Store = struct {
         return buf[0..count];
     }
 
+    /// Delete a batch and all its child records.
+    /// Caller must pass pre-fetched exploration and session IDs to avoid
+    /// read locks from cached statements.
+    /// Delete order respects FK constraints:
+    ///   events/snapshots → sessions → evidence → explorations → tasks → batches
+    pub fn deleteBatch(self: *Store, batch_id: Ulid, exploration_ids: []const Ulid, session_ids: []const Ulid) StoreError!void {
+        // Reset cached statements to release any read locks
+        if (self.cached_exps_by_task) |*s| s.reset();
+        if (self.cached_sessions_by_exp) |*s| s.reset();
+        if (self.cached_events_by_session) |*s| s.reset();
+        if (self.cached_evidence_by_exp) |*s| s.reset();
+
+        // 1. Delete events and snapshots (reference sessions)
+        for (session_ids) |sid| {
+            self.deleteByBlob("DELETE FROM events WHERE session_id = ?1", &sid.bytes) catch {};
+            self.deleteByBlob("DELETE FROM snapshots WHERE session_id = ?1", &sid.bytes) catch {};
+        }
+        // 2. Delete sessions (reference explorations)
+        for (exploration_ids) |eid| {
+            self.deleteByBlob("DELETE FROM sessions WHERE exploration_id = ?1", &eid.bytes) catch {};
+        }
+        // 3. Delete evidence (reference explorations)
+        for (exploration_ids) |eid| {
+            self.deleteByBlob("DELETE FROM evidence WHERE exploration_id = ?1", &eid.bytes) catch {};
+        }
+        // 4. Delete explorations (reference tasks)
+        for (exploration_ids) |eid| {
+            self.deleteByBlob("DELETE FROM explorations WHERE id = ?1", &eid.bytes) catch {};
+        }
+        // 5. Delete tasks (reference batches)
+        self.deleteByBlob("DELETE FROM tasks WHERE batch_id = ?1", &batch_id.bytes) catch {};
+        // 6. Delete the batch
+        self.deleteByBlob("DELETE FROM batches WHERE id = ?1", &batch_id.bytes) catch {};
+    }
+
+    fn deleteByBlob(self: *Store, sql: [:0]const u8, blob: []const u8) StoreError!void {
+        var stmt = try self.db.prepare(sql);
+        defer stmt.finalize();
+        try stmt.bindBlob(1, blob);
+        _ = try stmt.step();
+    }
+
     pub fn getTasksByBatch(self: *Store, batch_id: Ulid, buf: []Task) StoreError![]Task {
         var stmt = try self.db.prepare(
             "SELECT id, description, base_commit, base_branch, status, resolved_exploration_id, batch_id, created_at, updated_at FROM tasks WHERE batch_id = ?1 ORDER BY created_at",
