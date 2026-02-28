@@ -7,7 +7,7 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     var index_str: ?[]const u8 = null;
     var strategy_str: ?[]const u8 = null;
     var no_cleanup = false;
-    var preserve_context = false;
+    var no_context = false;
 
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
@@ -16,8 +16,8 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
             if (i < args.len) strategy_str = args[i];
         } else if (std.mem.eql(u8, args[i], "--no-cleanup")) {
             no_cleanup = true;
-        } else if (std.mem.eql(u8, args[i], "--preserve-context")) {
-            preserve_context = true;
+        } else if (std.mem.eql(u8, args[i], "--no-context")) {
+            no_context = true;
         } else if (index_str == null and args[i].len > 0 and args[i][0] != '-') {
             index_str = args[i];
         }
@@ -25,7 +25,7 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
 
     if (index_str == null) {
         try stderr.print("error: exploration index required\n", .{});
-        try stderr.print("usage: agx keep <index> [--strategy merge|rebase|squash|cherry-pick] [--preserve-context] [--no-cleanup]\n", .{});
+        try stderr.print("usage: agx keep <index> [--strategy merge|rebase|squash|cherry-pick] [--no-context] [--no-cleanup]\n", .{});
         try stderr.flush();
         std.process.exit(1);
     }
@@ -126,8 +126,8 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     try ctx.store.updateExplorationStatus(exp.id, .kept, null);
     try ctx.store.updateTaskStatus(task.id, .resolved, exp.id);
 
-    // Export context if requested
-    if (preserve_context) {
+    // Export context (default on, skip with --no-context)
+    if (!no_context) {
         if (agx.context_export.exportTaskContext(
             aa,
             &ctx.store,
