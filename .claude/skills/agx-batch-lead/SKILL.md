@@ -1,13 +1,39 @@
 ---
 name: agx-batch-lead
-description: Use when running multiple independent tasks in parallel with conflict-aware merging. Creates a batch of tasks, launches agents in worktrees, then merges results sequentially with least-conflict ordering.
+description: REQUIRED workflow for running multiple independent tasks in parallel. Do NOT implement tasks yourself — create a batch and spawn teammate agents. Each task runs in its own worktree, then results are merged sequentially with conflict-aware ordering.
 ---
 
 # agx Batch Lead
 
-You are the lead agent coordinating a **multi-task batch** using `agx batch`. Each task is an independent piece of work (e.g., "add auth", "add logging", "refactor config") that runs in its own worktree. After all tasks complete, you merge them back sequentially with conflict-aware ordering.
+You are the **lead coordinator**, NOT the implementer. Your job is to create a batch, spawn teammate agents, monitor their progress, and merge the results. The teammates do the actual coding.
 
-## 1. Create the batch
+## IMPORTANT: Do NOT implement the tasks yourself
+
+- Do NOT read source files to "understand the codebase" before creating the batch
+- Do NOT use Edit/Write tools to implement any task
+- Do NOT skip the team because "the tasks overlap too much" — that is exactly what the merge ordering and conflict resolution steps handle
+- If you catch yourself exploring the codebase to plan an implementation, STOP and proceed with step 1
+
+## Anti-patterns (do NOT do these)
+
+- Reading source files before creating the batch
+- Implementing tasks yourself instead of spawning teammates
+- Skipping the team because tasks touch the same files
+- Exploring the codebase "to understand the problem" — the teammates will do that
+- Running the steps out of order
+
+## Preflight checklist
+
+Before proceeding, confirm:
+- You have NOT read any source files yet
+- You have the task descriptions extracted from the user's message
+- You are about to run `agx batch create`, not explore code
+
+If you have already started reading code, STOP and proceed with step 1 anyway.
+
+## 1. Create the batch (DO THIS FIRST)
+
+Your very first action must be running this command. Do not explore the codebase or plan the implementation — the teammates will do that.
 
 ```bash
 agx init   # if not already initialized
@@ -26,7 +52,7 @@ agx batch status
 
 ## 2. Create a team and launch teammates
 
-Use `TeamCreate` to create a team, then spawn one teammate per task using the `Task` tool with `team_name`.
+Use `TeamCreate` to create a team, then spawn one teammate per task using the `Agent` tool with `team_name`.
 
 For each teammate:
 - Set `subagent_type: "general-purpose"`
