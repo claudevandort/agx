@@ -195,7 +195,7 @@ pub const GitCli = struct {
     /// Merge a branch without committing or fast-forwarding.
     /// Returns .clean on success, .conflict if there are conflicts.
     pub fn mergeNoCommit(self: *const GitCli, branch: []const u8) !MergeResult {
-        const result = try self.run(&.{ "merge", "--no-commit", "--no-ff", branch });
+        const result = try self.run(&.{ "merge", "--squash", branch });
         defer result.deinit(self.alloc);
         if (result.success) return .clean;
         // Exit code 1 with conflicts is expected; other failures are errors
