@@ -1,6 +1,6 @@
 # agx — Agent-Aware Version Control
 
-agx layers agent-aware workflows on top of git. When you run multiple AI coding agents on the same task, agx gives each one an isolated worktree, tracks their sessions and evidence, lets you compare results side by side, and merges the best exploration back to your branch with full provenance.
+agx layers agent-aware workflows on top of git. It supports two modes: **explore** (multiple agents tackle the same task with competing approaches — compare and keep the best) and **batch** (multiple independent tasks run in parallel — merge them all back sequentially with conflict-aware ordering). In both modes, agx gives each agent an isolated worktree, tracks sessions and evidence, and merges results back with full provenance.
 
 ## Install
 
@@ -26,7 +26,9 @@ agx spawn --task "refactor auth module" --count 3
 
 This creates 3 git worktrees, each with its own branch, session, and a `.agx-session` discovery file. Agents (or humans) can now work independently in each worktree.
 
-## Workflow
+## Explore Workflow
+
+One task, N competing approaches. Compare results, keep the best.
 
 ### Inside each worktree (agent or human)
 
@@ -104,6 +106,54 @@ agx context search "test" --task 01JK  # search within a specific task
 
 Context files in `.agx/context/` are tracked by git, so the full exploration history is available to anyone who clones the repo — even without `agx init`.
 
+## Batch Workflow
+
+N independent tasks, worked in parallel, merged sequentially with least-conflict-first ordering.
+
+```bash
+# Create a batch of tasks
+agx batch create --tasks "add auth middleware" "add request logging" "refactor config" --policy autonomous
+
+# Each task gets its own worktree and branch
+# Batch 01KJJ2: Batch of 3 tasks
+#   [1] 01KJJ2 — add auth middleware        worktree: .git/agx/worktrees/batch-01KJJ2/1
+#   [2] 01KJJ2 — add request logging        worktree: .git/agx/worktrees/batch-01KJJ2/2
+#   [3] 01KJJ2 — refactor config            worktree: .git/agx/worktrees/batch-01KJJ2/3
+```
+
+Agents work in each worktree independently. When all tasks are done:
+
+```bash
+# Check batch status
+agx batch status
+agx batch status --json              # machine-readable output
+
+# Preview merge order and file overlap
+agx batch merge --dry-run
+agx batch merge --dry-run --json     # machine-readable output
+
+# Example dry-run output:
+# Merge order (3 tasks):
+#   1. [3] refactor config (2 files changed)
+#   2. [1] add auth middleware (4 files changed)
+#   3. [2] add request logging (3 files changed)
+#
+# File overlap:
+#   [1] <-> [2]: 1 shared file(s)
+
+# Execute the merge
+agx batch merge
+```
+
+agx computes which tasks share the most files and merges the least-overlapping tasks first to minimize conflicts. Each task is squash-merged with `AGX-Batch` and `AGX-Task` trailers.
+
+### Conflict policies
+
+Set with `--policy` during `batch create`:
+
+- `autonomous` — the agent resolves all merge conflicts
+- `manual` — every conflict goes to the user
+
 ## Agent Integration
 
 Agents can integrate at two levels:
@@ -136,13 +186,14 @@ index=1
 ## Data Model
 
 ```
-Task (1) ──< Exploration (1) ──< Session (1) ──< Event
-                                     │
-                                     ├──< Snapshot
-                                     └──< Evidence
+Batch (optional) ──< Task (1) ──< Exploration (1) ──< Session (1) ──< Event
+                                                           │
+                                                           ├──< Snapshot
+                                                           └──< Evidence
 ```
 
-- **Task** — a unit of work with a base commit/branch
+- **Batch** — a group of independent tasks to be merged sequentially (merge policy, merge order, base commit)
+- **Task** — a unit of work with a base commit/branch (optionally belongs to a batch)
 - **Exploration** — one agent's attempt (own worktree + branch)
 - **Session** — agent working context (agent type, model version, timing)
 - **Event** — individual action (message, tool_call, decision, file_change, git_commit, error)
@@ -186,6 +237,9 @@ IDs are ULIDs (time-sortable, globally unique).
 | `agx clean` | Remove all artifacts from resolved tasks |
 | `agx context` | List and search archived exploration context |
 | `agx ingest` | Ingest agent events from JSONL files |
+| `agx batch create` | Create a batch of independent tasks with worktrees |
+| `agx batch status` | Show batch and per-task status (`--json` for machine output) |
+| `agx batch merge` | Merge all completed tasks sequentially (`--dry-run`, `--json`) |
 
 ## Building & Testing
 
