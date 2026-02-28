@@ -62,12 +62,16 @@ agx evidence --kind lint_result --status pass --summary "no linting errors"
 
 Always record evidence — it's how the orchestrator objectively compares explorations.
 
-### 5. Mark done and notify the lead
+### 5. Commit, mark done, and notify the lead
 
-When you've completed your work:
+When you've completed your work, **commit all changes before marking done**:
 ```bash
+git add -A
+git commit -m "Description of what you implemented"
 agx done --summary "Brief description of what you accomplished"
 ```
+
+**You must commit before running `agx done`.** The merge step depends on your branch having commits — uncommitted changes will be lost during merge. Verify with `git status` that your working tree is clean before proceeding.
 
 Then send a message to the team lead with your results — include your exploration index, approach, evidence summary, and done summary so the lead can decide without having to poll.
 
@@ -78,6 +82,6 @@ Make your done summary concrete — what changed and what's the evidence it work
 - **Declare approach early** — don't wait until you're done. The orchestrator may check `agx status` while you're still working.
 - **Record decisions as you go** — every significant choice (architecture, trade-offs, what you tried and rejected) should be a `agx record --kind decision` call. These are preserved in the decision log when context is exported.
 - **Record evidence** — explorations without evidence are hard to evaluate. Run the project's tests and record results.
-- **Commit your work** — `agx compare` uses git diff stats. Make sure your changes are committed.
+- **Commit before `agx done`** — your branch must have commits for merge to work. Uncommitted changes are invisible to `agx compare` and will be lost during `agx batch merge`. Always `git add` + `git commit` before `agx done`.
 - **Write a clear done summary** — this is what the orchestrator reads when comparing explorations.
 - You are in an isolated worktree. You cannot break other explorations. Work freely.
