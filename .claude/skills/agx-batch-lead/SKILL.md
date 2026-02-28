@@ -91,9 +91,19 @@ git commit -m "agx batch merge: <task description>"
 
 **manual**: Show all conflicts to the user and wait for them to resolve.
 
-## 6. Cleanup
+## 6. Export context
 
-After successful merge, shut down teammates and clean up:
+After all tasks have been merged successfully, export decision logs, evidence, and session history to `.agx/context/` so future agents can see what was done and why:
+
+```bash
+agx context export
+```
+
+This writes structured context files that are tracked in git and shared with the team.
+
+## 7. Cleanup
+
+After exporting context, shut down teammates and clean up:
 ```bash
 agx clean
 ```
