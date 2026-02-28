@@ -71,12 +71,12 @@ This is especially valuable when context is preserved — future agents can see 
 ## 5. Merge the winner
 
 ```bash
-agx keep <index>                        # merge into base branch
+agx keep <index>                        # merge and export context
 agx keep <index> --strategy squash      # squash merge
-agx keep <index> --preserve-context     # export context to .agx/context/
+agx keep <index> --no-context           # skip context export
 ```
 
-Always use `--preserve-context` when the task involved non-trivial trade-offs — it exports the decision log, evidence, and session history for future reference.
+Context (decision log, evidence, session history) is exported to `.agx/context/` by default. Only use `--no-context` for trivial tasks where the history isn't worth keeping.
 
 ## 6. Cleanup
 
@@ -93,4 +93,4 @@ Then shut down teammates and delete the team.
 - Always wait for all teammates to finish before comparing.
 - Run `agx compare` before deciding which to keep.
 - Use `agx archive` (not `discard`) for explorations with useful insights.
-- `--preserve-context` exports session logs to `.agx/context/` for git history.
+- `agx keep` exports context by default — use `--no-context` to skip.
