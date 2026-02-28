@@ -49,6 +49,8 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         try runSearch(aa, context_dir, sub_args, stdout, stderr);
     } else if (std.mem.eql(u8, subcmd, "reindex")) {
         try runReindex(aa, context_dir, stdout, stderr);
+    } else if (std.mem.eql(u8, subcmd, "export")) {
+        try runExport(aa, context_dir, sub_args, stdout, stderr);
     } else {
         try stderr.print("agx context: unknown subcommand '{s}'\n", .{subcmd});
         try printUsage(stderr);
@@ -64,6 +66,8 @@ fn printUsage(w: *std.Io.Writer) !void {
         \\Usage: agx context <subcommand> [options]
         \\
         \\Subcommands:
+        \\  export [--task <id>] [--batch <id>]
+        \\                          Export task or batch context to .agx/context/
         \\  list                    List archived task contexts
         \\  search <query>          Search context files (FTS5 ranked search)
         \\  reindex                 Rebuild the FTS search index
@@ -78,6 +82,139 @@ fn printUsage(w: *std.Io.Writer) !void {
         \\  --status <status>       Filter by task status (file-based fallback only)
         \\
     , .{});
+}
+
+// ── export subcommand ──
+
+fn runExport(
+    aa: Allocator,
+    context_dir: []const u8,
+    args: []const []const u8,
+    stdout: *std.Io.Writer,
+    stderr: *std.Io.Writer,
+) !void {
+    _ = context_dir;
+
+    var task_filter: ?[]const u8 = null;
+    var batch_filter: ?[]const u8 = null;
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        if (std.mem.eql(u8, args[i], "--task")) {
+            i += 1;
+            if (i < args.len) {
+                task_filter = args[i];
+            } else {
+                try stderr.print("error: --task requires a task ID prefix\n", .{});
+                try stderr.flush();
+                std.process.exit(1);
+            }
+        } else if (std.mem.eql(u8, args[i], "--batch")) {
+            i += 1;
+            if (i < args.len) {
+                batch_filter = args[i];
+            } else {
+                try stderr.print("error: --batch requires a batch ID prefix\n", .{});
+                try stderr.flush();
+                std.process.exit(1);
+            }
+        }
+    }
+
+    if (task_filter != null and batch_filter != null) {
+        try stderr.print("error: --task and --batch are mutually exclusive\n", .{});
+        try stderr.flush();
+        std.process.exit(1);
+    }
+
+    var ctx = CliContext.open(aa, stderr);
+    defer ctx.deinit();
+
+    if (batch_filter) |prefix| {
+        // Find batch by prefix match
+        var batch_buf: [32]agx.Batch = undefined;
+        const all_batches = ctx.store.getAllBatches(&batch_buf) catch {
+            try stderr.print("error: could not query batches\n", .{});
+            try stderr.flush();
+            std.process.exit(1);
+        };
+
+        var matched: ?agx.Batch = null;
+        for (all_batches) |b| {
+            const enc = b.id.encode();
+            if (std.mem.startsWith(u8, &enc, prefix)) {
+                if (matched != null) {
+                    try stderr.print("error: ambiguous batch prefix '{s}' — matches multiple batches\n", .{prefix});
+                    try stderr.flush();
+                    std.process.exit(1);
+                }
+                matched = b;
+            }
+        }
+
+        if (matched) |b| {
+            if (agx.context_export.exportBatchContext(aa, &ctx.store, &b, ".agx/context")) |dir| {
+                try stdout.print("Batch context exported to {s}\n", .{dir});
+            } else |err| {
+                try stderr.print("error: could not export batch context: {s}\n", .{@errorName(err)});
+                try stderr.flush();
+                std.process.exit(1);
+            }
+        } else {
+            try stderr.print("error: no batch matching prefix '{s}'\n", .{prefix});
+            try stderr.flush();
+            std.process.exit(1);
+        }
+    } else if (task_filter) |prefix| {
+        // Find task by prefix match
+        var task_buf: [64]agx.Task = undefined;
+        const all_tasks = ctx.store.getAllTasks(&task_buf) catch {
+            try stderr.print("error: could not query tasks\n", .{});
+            try stderr.flush();
+            std.process.exit(1);
+        };
+
+        var matched: ?agx.Task = null;
+        for (all_tasks) |t| {
+            const enc = t.id.encode();
+            if (std.mem.startsWith(u8, &enc, prefix)) {
+                if (matched != null) {
+                    try stderr.print("error: ambiguous task prefix '{s}' — matches multiple tasks\n", .{prefix});
+                    try stderr.flush();
+                    std.process.exit(1);
+                }
+                matched = t;
+            }
+        }
+
+        if (matched) |t| {
+            if (agx.context_export.exportTaskContext(aa, &ctx.store, &t, ".agx/context")) |dir| {
+                try stdout.print("Context exported to {s}\n", .{dir});
+            } else |err| {
+                try stderr.print("error: could not export context: {s}\n", .{@errorName(err)});
+                try stderr.flush();
+                std.process.exit(1);
+            }
+        } else {
+            try stderr.print("error: no task matching prefix '{s}'\n", .{prefix});
+            try stderr.flush();
+            std.process.exit(1);
+        }
+    } else {
+        // Default: export active task
+        const task = ctx.store.getActiveTask() catch {
+            try stderr.print("error: no active task found (use --task <id> to specify)\n", .{});
+            try stderr.flush();
+            std.process.exit(1);
+        };
+
+        if (agx.context_export.exportTaskContext(aa, &ctx.store, &task, ".agx/context")) |dir| {
+            try stdout.print("Context exported to {s}\n", .{dir});
+        } else |err| {
+            try stderr.print("error: could not export context: {s}\n", .{@errorName(err)});
+            try stderr.flush();
+            std.process.exit(1);
+        }
+    }
 }
 
 // ── Context directory scanning ──

@@ -122,10 +122,10 @@ git commit -m "agx batch merge: <task description>"
 After all tasks have been merged successfully, export decision logs, evidence, and session history to `.agx/context/` so future agents can see what was done and why:
 
 ```bash
-agx context export
+agx context export --batch <batch_id>
 ```
 
-This writes structured context files that are tracked in git and shared with the team.
+This exports per-task context plus a batch-level summary to `.agx/context/`, tracked in git and shared with the team.
 
 ## 7. Cleanup
 

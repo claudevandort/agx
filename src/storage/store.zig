@@ -787,6 +787,28 @@ pub const Store = struct {
         _ = try stmt.step();
     }
 
+    pub fn getAllBatches(self: *Store, buf: []Batch) StoreError![]Batch {
+        var stmt = try self.db.prepare(
+            "SELECT id, description, base_commit, base_branch, status, merge_policy, merge_order, created_at, updated_at FROM batches ORDER BY created_at DESC",
+        );
+        defer stmt.finalize();
+
+        var count: usize = 0;
+        while (count < buf.len) {
+            const result = try stmt.step();
+            if (result != .row) break;
+            buf[count] = try self.readBatch(&stmt);
+            count += 1;
+        }
+        if (count == buf.len) {
+            const extra = try stmt.step();
+            if (extra == .row) {
+                std.log.warn("getAllBatches: buffer full ({d}), results truncated", .{buf.len});
+            }
+        }
+        return buf[0..count];
+    }
+
     pub fn getTasksByBatch(self: *Store, batch_id: Ulid, buf: []Task) StoreError![]Task {
         var stmt = try self.db.prepare(
             "SELECT id, description, base_commit, base_branch, status, resolved_exploration_id, batch_id, created_at, updated_at FROM tasks WHERE batch_id = ?1 ORDER BY created_at",

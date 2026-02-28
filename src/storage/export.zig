@@ -6,6 +6,7 @@ const Exploration = @import("../core/exploration.zig").Exploration;
 const Session = @import("../core/session.zig").Session;
 const Event = @import("../core/event.zig").Event;
 const Evidence = @import("../core/evidence.zig").Evidence;
+const Batch = @import("../core/batch.zig").Batch;
 const Store = @import("store.zig").Store;
 const JsonWriter = @import("../util/json_writer.zig").JsonWriter;
 
@@ -260,6 +261,90 @@ fn writeDecisionLog(
 
     if (!has_decisions) {
         try w.print("No decisions recorded.\n", .{});
+    }
+
+    try w.flush();
+}
+
+/// Export all context for a batch: per-task context + batch summary.
+/// Returns the batch context directory path.
+pub fn exportBatchContext(
+    alloc: Allocator,
+    store: *Store,
+    batch_obj: *const Batch,
+    context_base: []const u8,
+) ![]const u8 {
+    const batch_id_str = batch_obj.id.encode();
+    const batch_dir = try std.fmt.allocPrint(alloc, "{s}/batch-{s}", .{ context_base, &batch_id_str });
+
+    std.fs.cwd().makePath(batch_dir) catch {};
+
+    // Export each task in the batch
+    var task_buf: [64]Task = undefined;
+    const tasks = try store.getTasksByBatch(batch_obj.id, &task_buf);
+
+    for (tasks) |t| {
+        _ = try exportTaskContext(alloc, store, &t, context_base);
+    }
+
+    // Write batch-level summary
+    try writeBatchSummary(alloc, batch_obj, tasks, batch_dir);
+
+    return batch_dir;
+}
+
+fn writeBatchSummary(
+    alloc: Allocator,
+    batch_obj: *const Batch,
+    tasks: []const Task,
+    batch_dir: []const u8,
+) !void {
+    const path = try std.fmt.allocPrint(alloc, "{s}/summary.md", .{batch_dir});
+
+    const file = std.fs.cwd().createFile(path, .{}) catch return;
+    defer file.close();
+
+    var buf: [4096]u8 = undefined;
+    var fw = file.writer(&buf);
+    const w = &fw.interface;
+
+    // YAML frontmatter
+    const batch_id_str = batch_obj.id.encode();
+    const date_str = formatDate(batch_obj.created_at);
+    try w.print("---\n", .{});
+    try w.print("batch_id: {s}\n", .{&batch_id_str});
+    try w.print("description: {s}\n", .{batch_obj.description});
+    try w.print("status: {s}\n", .{batch_obj.status.toStr()});
+    try w.print("merge_policy: {s}\n", .{batch_obj.merge_policy.toStr()});
+    try w.print("base_branch: {s}\n", .{batch_obj.base_branch});
+    try w.print("date: {s}\n", .{&date_str});
+    try w.print("tasks: {d}\n", .{tasks.len});
+    try w.print("---\n\n", .{});
+
+    // Markdown body
+    const batch_short = batch_obj.id.short(6);
+    try w.print("# Batch {s}: {s}\n\n", .{ &batch_short, batch_obj.description });
+    try w.print("- Base branch: {s}\n", .{batch_obj.base_branch});
+    try w.print("- Base commit: {s}\n", .{batch_obj.base_commit});
+    try w.print("- Status: {s}\n", .{batch_obj.status.toStr()});
+    try w.print("- Merge policy: {s}\n", .{batch_obj.merge_policy.toStr()});
+
+    // Task list
+    try w.print("\n## Tasks\n\n", .{});
+    for (tasks, 1..) |t, idx| {
+        const status_icon: []const u8 = switch (t.status) {
+            .active => "●",
+            .resolved => "✓",
+            .abandoned => "✗",
+        };
+        const task_id_str = t.id.encode();
+        try w.print("{d}. {s} `{s}` — {s}\n", .{ idx, status_icon, &task_id_str, t.description });
+    }
+
+    // Merge order section
+    if (batch_obj.merge_order) |order| {
+        try w.print("\n## Merge Order\n\n", .{});
+        try w.print("```\n{s}\n```\n", .{order});
     }
 
     try w.flush();
