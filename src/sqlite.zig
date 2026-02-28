@@ -190,6 +190,10 @@ pub const Stmt = struct {
         return c.sqlite3_column_int(self.handle, @intCast(idx));
     }
 
+    pub fn columnDouble(self: *Stmt, idx: u32) f64 {
+        return c.sqlite3_column_double(self.handle, @intCast(idx));
+    }
+
     pub fn columnIsNull(self: *Stmt, idx: u32) bool {
         return c.sqlite3_column_type(self.handle, @intCast(idx)) == c.SQLITE_NULL;
     }

@@ -54,6 +54,12 @@ pub const JsonWriter = struct {
         self.needs_comma = true;
     }
 
+    pub fn floatField(self: *JsonWriter, name: []const u8, value: f64) !void {
+        try self.writeComma();
+        try self.writer.print("\"{s}\":{d:.2}", .{ name, value });
+        self.needs_comma = true;
+    }
+
     pub fn boolField(self: *JsonWriter, name: []const u8, value: bool) !void {
         try self.writeComma();
         try self.writer.print("\"{s}\":{s}", .{ name, if (value) "true" else "false" });
