@@ -3,13 +3,17 @@ const Allocator = std.mem.Allocator;
 const agx = @import("agx");
 const fm_mod = agx.frontmatter;
 const Frontmatter = fm_mod.Frontmatter;
+const CliContext = @import("cli_common.zig").CliContext;
+const JsonWriter = agx.json_writer.JsonWriter;
 
 /// `agx context` — query archived exploration context in `.agx/context/`.
-/// No database dependency — works in any repo that has `.agx/context/` from git.
+/// Uses FTS5 full-text search when a database is available, falls back to
+/// file-based substring matching otherwise.
 ///
 /// Subcommands:
 ///   list                  Show a table of all archived task contexts
 ///   search <query>        Search across context files (metadata + content)
+///   reindex               Rebuild the FTS search index
 
 pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !void {
     var arena = std.heap.ArenaAllocator.init(alloc);
@@ -43,6 +47,8 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         try runList(aa, context_dir, sub_args, stdout, stderr);
     } else if (std.mem.eql(u8, subcmd, "search")) {
         try runSearch(aa, context_dir, sub_args, stdout, stderr);
+    } else if (std.mem.eql(u8, subcmd, "reindex")) {
+        try runReindex(aa, context_dir, stdout, stderr);
     } else {
         try stderr.print("agx context: unknown subcommand '{s}'\n", .{subcmd});
         try printUsage(stderr);
@@ -59,14 +65,17 @@ fn printUsage(w: *std.Io.Writer) !void {
         \\
         \\Subcommands:
         \\  list                    List archived task contexts
-        \\  search <query>          Search context files
+        \\  search <query>          Search context files (FTS5 ranked search)
+        \\  reindex                 Rebuild the FTS search index
         \\
         \\List options:
         \\  --status <status>       Filter by task status (active, resolved, abandoned)
         \\
         \\Search options:
-        \\  --task <id>             Filter by task ID prefix
-        \\  --status <status>       Filter by task status
+        \\  --json                  Output results as JSON (for LLM piping)
+        \\  --limit N               Max results (default 20)
+        \\  --task <id>             Filter by task ID prefix (file-based fallback only)
+        \\  --status <status>       Filter by task status (file-based fallback only)
         \\
     , .{});
 }
@@ -167,10 +176,12 @@ fn runSearch(
     stdout: *std.Io.Writer,
     stderr: *std.Io.Writer,
 ) !void {
-    // Parse args: search <query> [--task <id>] [--status <status>]
+    // Parse args: search <query> [--json] [--limit N] [--task <id>] [--status <status>]
     var query: ?[]const u8 = null;
     var task_filter: ?[]const u8 = null;
     var status_filter: ?[]const u8 = null;
+    var json_output = false;
+    var limit: u32 = 20;
 
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
@@ -180,6 +191,13 @@ fn runSearch(
         } else if (std.mem.eql(u8, args[i], "--status")) {
             i += 1;
             if (i < args.len) status_filter = args[i];
+        } else if (std.mem.eql(u8, args[i], "--json")) {
+            json_output = true;
+        } else if (std.mem.eql(u8, args[i], "--limit")) {
+            i += 1;
+            if (i < args.len) {
+                limit = std.fmt.parseInt(u32, args[i], 10) catch 20;
+            }
         } else if (query == null) {
             query = args[i];
         }
@@ -191,6 +209,73 @@ fn runSearch(
         std.process.exit(1);
     }
 
+    // Try FTS search if we have a query and DB is available
+    if (query) |q| {
+        if (tryFtsSearch(aa, q, limit, json_output, stdout, stderr)) return;
+    }
+
+    // Fallback: file-based search
+    try runFileSearch(aa, context_dir, query, task_filter, status_filter, stdout, stderr);
+}
+
+/// Attempt FTS5 search via the database. Returns true if successful.
+fn tryFtsSearch(
+    aa: Allocator,
+    query: []const u8,
+    limit: u32,
+    json_output: bool,
+    stdout: *std.Io.Writer,
+    stderr: *std.Io.Writer,
+) bool {
+    _ = stderr;
+    var ctx = CliContext.openOptional(aa);
+    if (ctx == null) return false;
+    defer ctx.?.deinit();
+
+    const capped_limit = if (limit > 100) @as(u32, 100) else limit;
+    var result_buf: [100]agx.Store.SearchResult = undefined;
+    const results = ctx.?.store.searchFts(query, result_buf[0..capped_limit]) catch return false;
+
+    if (json_output) {
+        var jw = JsonWriter.init(stdout);
+        jw.beginObject() catch return false;
+        jw.arrayField("results") catch return false;
+        for (results) |r| {
+            jw.beginObjectValue() catch return false;
+            jw.stringField("type", r.entity_type) catch return false;
+            jw.stringField("entity_id", r.entity_id) catch return false;
+            jw.stringField("task_id", r.task_id) catch return false;
+            jw.stringField("snippet", r.snippet) catch return false;
+            jw.floatField("rank", r.rank) catch return false;
+            jw.endObject() catch return false;
+        }
+        jw.endArray() catch return false;
+        jw.endObject() catch return false;
+        stdout.print("\n", .{}) catch return false;
+    } else {
+        if (results.len == 0) {
+            stdout.print("No matches found.\n", .{}) catch return false;
+            return true;
+        }
+        for (results, 1..) |r, idx| {
+            stdout.print("[{d}] {s}  {s}  ({d:.2})\n", .{ idx, r.entity_type, r.task_id, r.rank }) catch return false;
+            stdout.print("    {s}\n", .{r.snippet}) catch return false;
+        }
+        stdout.print("\n{d} result(s).\n", .{results.len}) catch return false;
+    }
+    return true;
+}
+
+/// File-based search fallback (original behavior).
+fn runFileSearch(
+    aa: Allocator,
+    context_dir: []const u8,
+    query: ?[]const u8,
+    task_filter: ?[]const u8,
+    status_filter: ?[]const u8,
+    stdout: *std.Io.Writer,
+    stderr: *std.Io.Writer,
+) !void {
     const entries = try scanContextDir(aa, context_dir);
 
     if (entries.len == 0) {
@@ -241,6 +326,35 @@ fn runSearch(
     } else {
         try stdout.print("{d} context(s) matched.\n", .{match_count});
     }
+}
+
+// ── reindex subcommand ──
+
+fn runReindex(
+    aa: Allocator,
+    context_dir: []const u8,
+    stdout: *std.Io.Writer,
+    stderr: *std.Io.Writer,
+) !void {
+    var ctx = CliContext.open(aa, stderr);
+    defer ctx.deinit();
+
+    // Index DB data
+    ctx.store.indexForSearch() catch {
+        try stderr.print("error: failed to index database\n", .{});
+        try stderr.flush();
+        std.process.exit(1);
+    };
+
+    // Index context files
+    ctx.store.indexContextFiles(context_dir) catch {
+        try stderr.print("error: failed to index context files\n", .{});
+        try stderr.flush();
+        std.process.exit(1);
+    };
+
+    const count = ctx.store.countFtsEntries() catch 0;
+    try stdout.print("Indexed {d} entries.\n", .{count});
 }
 
 /// Print lines from content that contain the query (case-insensitive).

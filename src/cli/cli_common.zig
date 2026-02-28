@@ -48,6 +48,22 @@ pub const CliContext = struct {
         };
     }
 
+    /// Try to open the agx store. Returns null if not available
+    /// (not a git repo, not initialized, or DB open fails).
+    pub fn openOptional(alloc: Allocator) ?CliContext {
+        const git = agx.GitCli.init(alloc, null);
+        const git_dir = git.gitDir() catch return null;
+        const db_path = std.fmt.allocPrintSentinel(alloc, "{s}/agx/db.sqlite3", .{git_dir}, 0) catch return null;
+        std.fs.cwd().access(db_path[0..db_path.len :0], .{}) catch return null;
+        const store = agx.Store.init(alloc, db_path) catch return null;
+        return .{
+            .git = git,
+            .git_dir = git_dir,
+            .db_path = db_path,
+            .store = store,
+        };
+    }
+
     pub fn deinit(self: *CliContext) void {
         self.store.deinit();
     }
