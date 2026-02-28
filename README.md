@@ -1,6 +1,11 @@
 # agx — Agent-Aware Version Control
 
-agx layers agent-aware workflows on top of git. It supports two modes: **explore** (multiple agents tackle the same task with competing approaches — compare and keep the best) and **batch** (multiple independent tasks run in parallel — merge them all back sequentially with conflict-aware ordering). In both modes, agx gives each agent an isolated worktree, tracks sessions and evidence, and merges results back with full provenance.
+`agx` layers agent-aware workflows on top of git. It supports two modes: 
+
+- **explore** (multiple agents tackle the same task with competing approaches — compare and keep the best)
+-  **batch** (multiple independent tasks run in parallel — merge them all back sequentially with conflict-aware ordering). 
+
+In both modes, `agx` gives each agent an isolated worktree, tracks sessions and evidence, and merges results back with full provenance.
 
 ## Install
 
