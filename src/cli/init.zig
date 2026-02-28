@@ -1,8 +1,34 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const agx = @import("agx");
+const skill_files = @import("skill_files");
+
+const claude_md_section =
+    \\
+    \\## Parallel Explorations
+    \\
+    \\To run parallel agent explorations of a task, invoke the `/agx-lead` skill.
+    \\It contains full instructions on spawning explorations, launching agent teams,
+    \\comparing results, and merging the winner.
+    \\
+;
+
+const claude_md_full =
+    \\# CLAUDE.md
+    \\
+    \\## Parallel Explorations
+    \\
+    \\To run parallel agent explorations of a task, invoke the `/agx-lead` skill.
+    \\It contains full instructions on spawning explorations, launching agent teams,
+    \\comparing results, and merging the winner.
+    \\
+;
 
 pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !void {
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
     var shared = false;
     for (args) |arg| {
         if (std.mem.eql(u8, arg, "--shared")) {
@@ -11,13 +37,12 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     }
 
     // Verify we're in a git repo
-    const git = agx.GitCli.init(alloc, null);
+    const git = agx.GitCli.init(aa, null);
     const git_dir = git.gitDir() catch {
         try stderr.print("error: not a git repository\n", .{});
         try stderr.flush();
         std.process.exit(1);
     };
-    defer alloc.free(git_dir);
 
     // Create .git/agx/ directory structure
     const dirs = [_][]const u8{
@@ -28,8 +53,7 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     };
 
     for (dirs) |sub| {
-        const full = try std.fmt.allocPrint(alloc, "{s}/{s}", .{ git_dir, sub });
-        defer alloc.free(full);
+        const full = try std.fmt.allocPrint(aa, "{s}/{s}", .{ git_dir, sub });
         std.fs.cwd().makePath(full) catch |err| {
             try stderr.print("error: could not create {s}: {s}\n", .{ full, @errorName(err) });
             try stderr.flush();
@@ -38,14 +62,41 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     }
 
     // Initialize the SQLite database
-    const db_path = try std.fmt.allocPrintSentinel(alloc, "{s}/agx/db.sqlite3", .{git_dir}, 0);
-    defer alloc.free(db_path);
+    const db_path = try std.fmt.allocPrintSentinel(aa, "{s}/agx/db.sqlite3", .{git_dir}, 0);
 
-    var store = try agx.Store.init(alloc, db_path);
+    var store = try agx.Store.init(aa, db_path);
     store.deinit();
 
     try stdout.print("Initialized agx in {s}/agx/\n", .{git_dir});
 
+    // Get repo root for CLAUDE.md and skill files
+    const repo_root = git.repoRoot() catch {
+        // Non-fatal — core init succeeded
+        try finishShared(shared, stdout, stderr);
+        return;
+    };
+
+    // Create/update CLAUDE.md
+    createOrUpdateClaudeMd(aa, repo_root, stdout) catch |err| {
+        try stderr.print("warning: could not create CLAUDE.md: {s}\n", .{@errorName(err)});
+        try stderr.flush();
+    };
+
+    // Create skill files
+    createSkillFile(aa, repo_root, "agx-lead", skill_files.agx_lead, stdout) catch |err| {
+        try stderr.print("warning: could not create agx-lead skill: {s}\n", .{@errorName(err)});
+        try stderr.flush();
+    };
+    createSkillFile(aa, repo_root, "agx-teammate", skill_files.agx_teammate, stdout) catch |err| {
+        try stderr.print("warning: could not create agx-teammate skill: {s}\n", .{@errorName(err)});
+        try stderr.flush();
+    };
+
+    try finishShared(shared, stdout, stderr);
+}
+
+fn finishShared(shared: bool, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !void {
+    _ = stderr;
     // Create .agx/ for team sharing if --shared
     if (shared) {
         const shared_dirs = [_][]const u8{
@@ -80,4 +131,63 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     }
 
     try stdout.flush();
+}
+
+fn createOrUpdateClaudeMd(alloc: Allocator, repo_root: []const u8, stdout: *std.Io.Writer) !void {
+    const path = try std.fmt.allocPrint(alloc, "{s}/CLAUDE.md", .{repo_root});
+
+    // Try to read existing file
+    const existing = std.fs.cwd().readFileAlloc(alloc, path, 64 * 1024) catch |err| {
+        if (err == error.FileNotFound) {
+            // Create new CLAUDE.md
+            const file = try std.fs.cwd().createFile(path, .{});
+            defer file.close();
+            var buf: [4096]u8 = undefined;
+            var writer = file.writer(&buf);
+            try writer.interface.writeAll(claude_md_full);
+            try writer.interface.flush();
+            try stdout.print("Created CLAUDE.md with agx instructions\n", .{});
+            return;
+        }
+        return err;
+    };
+
+    // File exists — check if it already has agx content
+    if (std.mem.indexOf(u8, existing, "agx-lead") != null) {
+        return;
+    }
+
+    // Append agx section
+    const new_content = try std.fmt.allocPrint(alloc, "{s}{s}", .{ existing, claude_md_section });
+
+    const file = try std.fs.cwd().createFile(path, .{});
+    defer file.close();
+    var buf: [4096]u8 = undefined;
+    var writer = file.writer(&buf);
+    try writer.interface.writeAll(new_content);
+    try writer.interface.flush();
+    try stdout.print("Updated CLAUDE.md with agx instructions\n", .{});
+}
+
+fn createSkillFile(alloc: Allocator, repo_root: []const u8, name: []const u8, content: []const u8, stdout: *std.Io.Writer) !void {
+    const dir_path = try std.fmt.allocPrint(alloc, "{s}/.claude/skills/{s}", .{ repo_root, name });
+    const file_path = try std.fmt.allocPrint(alloc, "{s}/SKILL.md", .{dir_path});
+
+    // Create directory structure
+    try std.fs.cwd().makePath(dir_path);
+
+    // Create file (exclusive — skip if exists)
+    const file = std.fs.cwd().createFile(file_path, .{ .exclusive = true }) catch |err| {
+        if (err == error.PathAlreadyExists) {
+            return;
+        }
+        return err;
+    };
+    defer file.close();
+
+    var buf: [8192]u8 = undefined;
+    var writer = file.writer(&buf);
+    try writer.interface.writeAll(content);
+    try writer.interface.flush();
+    try stdout.print("Created .claude/skills/{s}/SKILL.md\n", .{name});
 }
