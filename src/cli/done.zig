@@ -26,13 +26,13 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     var store = try agx.Store.init(aa, ctx.db_path);
     defer store.deinit();
 
-    const exp_id = agx.Ulid.decode(ctx.info.exploration_id_str) catch {
-        try stderr.print("error: invalid exploration ID in .agx-session\n", .{});
+    const task_id = agx.Ulid.decode(ctx.info.task_id_str) catch {
+        try stderr.print("error: invalid task ID in .agx-session\n", .{});
         try stderr.flush();
         std.process.exit(1);
     };
 
-    try store.updateExplorationStatus(exp_id, .done, summary);
+    try store.updateTaskStatus(task_id, .done, summary);
 
     const sess_id = agx.Ulid.decode(ctx.info.session_id_str) catch {
         try stderr.print("error: invalid session ID in .agx-session\n", .{});
@@ -41,8 +41,8 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     };
     try store.endSession(sess_id, .completed);
 
-    const short = exp_id.short(6);
-    try stdout.print("Exploration {s} marked as done.\n", .{&short});
+    const short = task_id.short(6);
+    try stdout.print("Task {s} marked as done.\n", .{&short});
     if (summary) |s| {
         try stdout.print("Summary: {s}\n", .{s});
     }

@@ -11,73 +11,73 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     var ctx = CliContext.open(aa, stderr);
     defer ctx.deinit();
 
-    // Check if --task <id> was given
-    var task_filter: ?[]const u8 = null;
+    // Check if --goal <id> was given
+    var goal_filter: ?[]const u8 = null;
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
-        if (std.mem.eql(u8, args[i], "--task") or std.mem.eql(u8, args[i], "-t")) {
+        if (std.mem.eql(u8, args[i], "--goal") or std.mem.eql(u8, args[i], "-g")) {
             i += 1;
-            if (i < args.len) task_filter = args[i];
+            if (i < args.len) goal_filter = args[i];
         }
     }
 
-    if (task_filter) |filter| {
-        // Show single task detail
-        try showTaskByFilter(&ctx.store, alloc, filter, stdout, stderr);
+    if (goal_filter) |filter| {
+        // Show single goal detail
+        try showGoalByFilter(&ctx.store, alloc, filter, stdout, stderr);
     } else {
-        // Show all active tasks
-        try showAllTasks(&ctx.store, alloc, stdout);
+        // Show all active goals
+        try showAllGoals(&ctx.store, alloc, stdout);
     }
 
     try stdout.flush();
 }
 
-fn showAllTasks(store: *agx.Store, alloc: Allocator, stdout: *std.Io.Writer) !void {
-    var task_buf: [32]agx.Task = undefined;
-    const tasks = try store.getAllTasks(&task_buf);
+fn showAllGoals(store: *agx.Store, alloc: Allocator, stdout: *std.Io.Writer) !void {
+    var goal_buf: [32]agx.Goal = undefined;
+    const goals = try store.getAllGoals(&goal_buf);
 
-    if (tasks.len == 0) {
-        try stdout.print("No tasks found. Use 'agx spawn --task \"...\"' to create one.\n", .{});
+    if (goals.len == 0) {
+        try stdout.print("No goals found. Use 'agx exploration create --goal \"...\"' to create one.\n", .{});
         return;
     }
 
-    for (tasks) |task| {
-        const short = task.id.short(6);
-        try stdout.print("{s}  {s:<12} {s:<20} base:{s}\n", .{ &short, task.status.toStr(), task.description, task.base_branch });
-        try showExplorations(store, alloc, task.id, stdout);
+    for (goals) |g| {
+        const short = g.id.short(6);
+        try stdout.print("{s}  {s:<12} {s:<20} base:{s}\n", .{ &short, g.status.toStr(), g.description, g.base_branch });
+        try showTasks(store, alloc, g.id, stdout);
     }
 }
 
-fn showTaskByFilter(store: *agx.Store, alloc: Allocator, filter: []const u8, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !void {
-    var task_buf: [32]agx.Task = undefined;
-    const tasks = try store.getAllTasks(&task_buf);
+fn showGoalByFilter(store: *agx.Store, alloc: Allocator, filter: []const u8, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !void {
+    var goal_buf: [32]agx.Goal = undefined;
+    const goals = try store.getAllGoals(&goal_buf);
 
-    for (tasks) |task| {
-        const encoded = task.id.encode();
+    for (goals) |g| {
+        const encoded = g.id.encode();
         if (filter.len > encoded.len) continue;
         if (std.ascii.eqlIgnoreCase(filter, encoded[0..filter.len])) {
-            const short = task.id.short(6);
-            try stdout.print("Task {s}: {s}\n", .{ &short, task.description });
-            try stdout.print("  Status: {s}\n", .{task.status.toStr()});
-            try stdout.print("  Base:   {s} ({s})\n", .{ task.base_branch, task.base_commit[0..@min(8, task.base_commit.len)] });
+            const short = g.id.short(6);
+            try stdout.print("Goal {s}: {s}\n", .{ &short, g.description });
+            try stdout.print("  Status: {s}\n", .{g.status.toStr()});
+            try stdout.print("  Base:   {s} ({s})\n", .{ g.base_branch, g.base_commit[0..@min(8, g.base_commit.len)] });
             try stdout.print("\n", .{});
 
-            try showExplorations(store, alloc, task.id, stdout);
+            try showTasks(store, alloc, g.id, stdout);
             return;
         }
     }
 
-    try stderr.print("error: no task matching '{s}'\n", .{filter});
+    try stderr.print("error: no goal matching '{s}'\n", .{filter});
     try stderr.flush();
     std.process.exit(1);
 }
 
-fn showExplorations(store: *agx.Store, _: Allocator, task_id: agx.Ulid, stdout: *std.Io.Writer) !void {
-    var buf: [32]agx.Exploration = undefined;
-    const exps = try store.getExplorationsByTask(task_id, &buf);
+fn showTasks(store: *agx.Store, _: Allocator, goal_id: agx.Ulid, stdout: *std.Io.Writer) !void {
+    var buf: [32]agx.Task = undefined;
+    const tasks = try store.getTasksByGoal(goal_id, &buf);
 
-    for (exps) |exp| {
-        const status_icon: []const u8 = switch (exp.status) {
+    for (tasks) |t| {
+        const status_icon: []const u8 = switch (t.status) {
             .active => "●",
             .done => "✓",
             .kept => "★",
@@ -87,15 +87,15 @@ fn showExplorations(store: *agx.Store, _: Allocator, task_id: agx.Ulid, stdout: 
 
         try stdout.print("  {s} [{d}] {s:<12} {s}\n", .{
             status_icon,
-            exp.index,
-            exp.status.toStr(),
-            exp.worktree_path,
+            t.index,
+            t.status.toStr(),
+            t.worktree_path,
         });
 
-        if (exp.approach) |approach| {
+        if (t.approach) |approach| {
             try stdout.print("           approach: {s}\n", .{approach});
         }
-        if (exp.summary) |summary| {
+        if (t.summary) |summary| {
             try stdout.print("           summary:  {s}\n", .{summary});
         }
     }

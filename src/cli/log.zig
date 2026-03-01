@@ -28,14 +28,14 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     }
 
     if (index_str == null) {
-        try stderr.print("error: exploration index required\n", .{});
-        try stderr.print("usage: agx log <index> [--kind <type>] [--limit N] [--json]\n", .{});
+        try stderr.print("error: task index required\n", .{});
+        try stderr.print("usage: agx exploration log <index> [--kind <type>] [--limit N] [--json]\n", .{});
         try stderr.flush();
         std.process.exit(1);
     }
 
     const index = std.fmt.parseInt(u32, index_str.?, 10) catch {
-        try stderr.print("error: invalid exploration index '{s}'\n", .{index_str.?});
+        try stderr.print("error: invalid task index '{s}'\n", .{index_str.?});
         try stderr.flush();
         std.process.exit(1);
     };
@@ -47,28 +47,28 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     var ctx = CliContext.open(aa, stderr);
     defer ctx.deinit();
 
-    // Find the active task
-    const task = ctx.store.getActiveTask() catch {
-        try stderr.print("error: no active task found\n", .{});
+    // Find the active goal
+    const g = ctx.store.getActiveGoal() catch {
+        try stderr.print("error: no active goal found\n", .{});
         try stderr.flush();
         std.process.exit(1);
         unreachable;
     };
 
-    // Find exploration by index
-    const exp = ctx.store.getExplorationByIndex(task.id, index) catch {
-        try stderr.print("error: exploration [{d}] not found\n", .{index});
+    // Find task by index
+    const t = ctx.store.getTaskByIndex(g.id, index) catch {
+        try stderr.print("error: task [{d}] not found\n", .{index});
         try stderr.flush();
         std.process.exit(1);
         unreachable;
     };
 
-    // Get sessions for this exploration
+    // Get sessions for this task
     var sess_buf: [8]agx.Session = undefined;
-    const sessions = try ctx.store.getSessionsByExploration(exp.id, &sess_buf);
+    const sessions = try ctx.store.getSessionsByTask(t.id, &sess_buf);
 
     if (sessions.len == 0) {
-        try stdout.print("No sessions found for exploration [{d}]\n", .{index});
+        try stdout.print("No sessions found for task [{d}]\n", .{index});
         try stdout.flush();
         return;
     }
@@ -125,7 +125,7 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     if (format_json) {
         try stdout.print("]\n", .{});
     } else if (total_events == 0) {
-        try stdout.print("No events recorded for exploration [{d}]", .{index});
+        try stdout.print("No events recorded for task [{d}]", .{index});
         if (kind_filter) |kf| {
             try stdout.print(" (filter: {s})", .{kf});
         }

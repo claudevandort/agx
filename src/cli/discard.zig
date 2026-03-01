@@ -14,14 +14,14 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     }
 
     if (index_str == null) {
-        try stderr.print("error: exploration index required\n", .{});
-        try stderr.print("usage: agx discard <index>\n", .{});
+        try stderr.print("error: task index required\n", .{});
+        try stderr.print("usage: agx exploration discard <index>\n", .{});
         try stderr.flush();
         std.process.exit(1);
     }
 
     const index = std.fmt.parseInt(u32, index_str.?, 10) catch {
-        try stderr.print("error: invalid exploration index '{s}'\n", .{index_str.?});
+        try stderr.print("error: invalid task index '{s}'\n", .{index_str.?});
         try stderr.flush();
         std.process.exit(1);
     };
@@ -33,35 +33,35 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     var ctx = CliContext.open(aa, stderr);
     defer ctx.deinit();
 
-    const task = ctx.store.getActiveTask() catch {
-        try stderr.print("error: no active task found\n", .{});
+    const g = ctx.store.getActiveGoal() catch {
+        try stderr.print("error: no active goal found\n", .{});
         try stderr.flush();
         std.process.exit(1);
         unreachable;
     };
 
-    const exp = ctx.store.getExplorationByIndex(task.id, index) catch {
-        try stderr.print("error: exploration [{d}] not found\n", .{index});
+    const t = ctx.store.getTaskByIndex(g.id, index) catch {
+        try stderr.print("error: task [{d}] not found\n", .{index});
         try stderr.flush();
         std.process.exit(1);
         unreachable;
     };
 
-    if (exp.status == .kept) {
-        try stderr.print("error: exploration [{d}] is already kept — cannot discard\n", .{index});
+    if (t.status == .kept) {
+        try stderr.print("error: task [{d}] is already kept — cannot discard\n", .{index});
         try stderr.flush();
         std.process.exit(1);
     }
 
     // Remove worktree
-    ctx.git.removeWorktree(exp.worktree_path) catch {};
+    ctx.git.removeWorktree(t.worktree_path) catch {};
 
     // Delete branch
-    ctx.git.deleteBranch(exp.branch_name) catch {};
+    ctx.git.deleteBranch(t.branch_name) catch {};
 
     // Update status
-    try ctx.store.updateExplorationStatus(exp.id, .discarded, null);
+    try ctx.store.updateTaskStatus(t.id, .discarded, null);
 
-    try stdout.print("Discarded exploration [{d}] — worktree and branch removed.\n", .{index});
+    try stdout.print("Discarded task [{d}] — worktree and branch removed.\n", .{index});
     try stdout.flush();
 }

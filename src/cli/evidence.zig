@@ -28,7 +28,7 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
 
     if (kind_str == null) {
         try stderr.print("error: --kind is required\n", .{});
-        try stderr.print("usage: agx evidence --kind <type> --status <pass|fail|error|skip> [--summary \"...\"] [--file path]\n", .{});
+        try stderr.print("usage: agx exploration evidence --kind <type> --status <pass|fail|error|skip> [--summary \"...\"] [--file path]\n", .{});
         try stderr.print("kinds: test_result, build_output, coverage_report, lint_result, benchmark, custom\n", .{});
         try stderr.flush();
         std.process.exit(1);
@@ -66,8 +66,8 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     var store = try agx.Store.init(aa, ctx.db_path);
     defer store.deinit();
 
-    const exp_id = agx.Ulid.decode(ctx.info.exploration_id_str) catch {
-        try stderr.print("error: invalid exploration ID in .agx-session\n", .{});
+    const task_id = agx.Ulid.decode(ctx.info.task_id_str) catch {
+        try stderr.print("error: invalid task ID in .agx-session\n", .{});
         try stderr.flush();
         std.process.exit(1);
     };
@@ -98,8 +98,8 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         hash = try std.fmt.allocPrint(aa, "sha256:{s}", .{&hex});
 
         // Copy file to evidence store
-        const exp_id_str = exp_id.encode();
-        const evidence_dir = try std.fmt.allocPrint(aa, "{s}/agx/evidence/{s}", .{ ctx.common_dir, &exp_id_str });
+        const task_id_str = task_id.encode();
+        const evidence_dir = try std.fmt.allocPrint(aa, "{s}/agx/evidence/{s}", .{ ctx.common_dir, &task_id_str });
 
         std.fs.cwd().makePath(evidence_dir) catch {};
 
@@ -115,7 +115,7 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     const now = std.time.milliTimestamp();
     try store.insertEvidence(.{
         .id = agx.Ulid.new(),
-        .exploration_id = exp_id,
+        .exploration_id = task_id,
         .kind = kind,
         .status = status,
         .hash = hash,

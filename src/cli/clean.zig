@@ -14,93 +14,93 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     var ctx = CliContext.open(aa, stderr);
     defer ctx.deinit();
 
-    var cleaned_tasks: u32 = 0;
+    var cleaned_goals: u32 = 0;
     var cleaned_worktrees: u32 = 0;
     var cleaned_branches: u32 = 0;
 
-    // Find all resolved tasks (non-batch explorations)
+    // Find all resolved goals (non-dispatch tasks)
     var id_buf: [64]agx.Ulid = undefined;
-    const resolved_ids = try ctx.store.getResolvedTaskIds(&id_buf);
+    const resolved_ids = try ctx.store.getResolvedGoalIds(&id_buf);
 
-    for (resolved_ids) |task_id| {
-        var exp_buf: [32]agx.Exploration = undefined;
-        const exps = ctx.store.getExplorationsByTask(task_id, &exp_buf) catch continue;
+    for (resolved_ids) |goal_id| {
+        var task_buf: [32]agx.Task = undefined;
+        const tasks = ctx.store.getTasksByGoal(goal_id, &task_buf) catch continue;
 
-        for (exps) |e| {
-            cleaned_worktrees += cleanWorktree(&ctx.git, e.worktree_path);
-            if (e.status != .kept) {
-                cleaned_branches += cleanBranch(&ctx.git, e.branch_name);
+        for (tasks) |t| {
+            cleaned_worktrees += cleanWorktree(&ctx.git, t.worktree_path);
+            if (t.status != .kept) {
+                cleaned_branches += cleanBranch(&ctx.git, t.branch_name);
             }
-            cleanEvidence(aa, ctx.git_dir, e.id);
+            cleanEvidence(aa, ctx.git_dir, t.id);
         }
 
         // Remove the worktree directory structure
-        const task_short = task_id.short(6);
-        const worktree_dir = std.fmt.allocPrint(aa, "{s}/agx/worktrees/{s}", .{ ctx.git_dir, &task_short }) catch continue;
+        const goal_short = goal_id.short(6);
+        const worktree_dir = std.fmt.allocPrint(aa, "{s}/agx/worktrees/{s}", .{ ctx.git_dir, &goal_short }) catch continue;
         std.fs.cwd().deleteTree(worktree_dir) catch {};
 
-        cleaned_tasks += 1;
+        cleaned_goals += 1;
     }
 
-    // Clean up terminal-state batches (completed, failed, abandoned)
-    var batch_buf: [32]agx.Batch = undefined;
-    const all_batches = ctx.store.getAllBatches(&batch_buf) catch &[_]agx.Batch{};
-    var cleaned_batches: u32 = 0;
+    // Clean up terminal-state dispatches (completed, failed, abandoned)
+    var dispatch_buf: [32]agx.Dispatch = undefined;
+    const all_dispatches = ctx.store.getAllDispatches(&dispatch_buf) catch &[_]agx.Dispatch{};
+    var cleaned_dispatches: u32 = 0;
 
-    for (all_batches) |batch| {
-        switch (batch.status) {
+    for (all_dispatches) |d| {
+        switch (d.status) {
             .completed, .failed, .abandoned => {},
             .active, .merging, .conflict => continue,
         }
 
-        const batch_short = batch.id.short(6);
+        const dispatch_short = d.id.short(6);
 
-        // Collect task and exploration IDs, clean worktrees/branches
-        var task_buf: [64]agx.Task = undefined;
-        const tasks = ctx.store.getTasksByBatch(batch.id, &task_buf) catch continue;
+        // Collect goal and task IDs, clean worktrees/branches
+        var goal_buf: [64]agx.Goal = undefined;
+        const goals = ctx.store.getGoalsByDispatch(d.id, &goal_buf) catch continue;
 
-        var exp_ids = std.ArrayList(agx.Ulid).empty;
+        var task_ids = std.ArrayList(agx.Ulid).empty;
         var session_ids = std.ArrayList(agx.Ulid).empty;
 
-        for (tasks) |t| {
-            var exp_buf: [8]agx.Exploration = undefined;
-            const exps = ctx.store.getExplorationsByTask(t.id, &exp_buf) catch continue;
+        for (goals) |g| {
+            var task_buf: [8]agx.Task = undefined;
+            const tasks = ctx.store.getTasksByGoal(g.id, &task_buf) catch continue;
 
-            for (exps) |e| {
-                exp_ids.append(aa, e.id) catch continue;
-                cleaned_worktrees += cleanWorktree(&ctx.git, e.worktree_path);
-                if (e.status != .kept) {
-                    cleaned_branches += cleanBranch(&ctx.git, e.branch_name);
+            for (tasks) |t| {
+                task_ids.append(aa, t.id) catch continue;
+                cleaned_worktrees += cleanWorktree(&ctx.git, t.worktree_path);
+                if (t.status != .kept) {
+                    cleaned_branches += cleanBranch(&ctx.git, t.branch_name);
                 }
-                cleanEvidence(aa, ctx.git_dir, e.id);
+                cleanEvidence(aa, ctx.git_dir, t.id);
 
                 // Collect session IDs for FK-safe deletion
                 var sess_buf: [16]agx.Session = undefined;
-                const sessions = ctx.store.getSessionsByExploration(e.id, &sess_buf) catch continue;
+                const sessions = ctx.store.getSessionsByTask(t.id, &sess_buf) catch continue;
                 for (sessions) |s| {
                     session_ids.append(aa, s.id) catch continue;
                 }
             }
         }
 
-        // Remove the batch worktree directory structure
-        const batch_dir = std.fmt.allocPrint(aa, "{s}/agx/worktrees/batch-{s}", .{ ctx.git_dir, &batch_short }) catch continue;
-        std.fs.cwd().deleteTree(batch_dir) catch {};
+        // Remove the dispatch worktree directory structure
+        const dispatch_dir = std.fmt.allocPrint(aa, "{s}/agx/worktrees/dispatch-{s}", .{ ctx.git_dir, &dispatch_short }) catch continue;
+        std.fs.cwd().deleteTree(dispatch_dir) catch {};
 
-        // Remove the batch and all child records from the database
-        ctx.store.deleteBatch(batch.id, exp_ids.items, session_ids.items) catch {};
+        // Remove the dispatch and all child records from the database
+        ctx.store.deleteDispatch(d.id, task_ids.items, session_ids.items) catch {};
 
-        cleaned_batches += 1;
+        cleaned_dispatches += 1;
     }
 
-    if (cleaned_tasks == 0 and cleaned_batches == 0) {
+    if (cleaned_goals == 0 and cleaned_dispatches == 0) {
         try stdout.print("Nothing to clean.\n", .{});
     } else {
-        if (cleaned_tasks > 0) {
-            try stdout.print("Cleaned {d} resolved task(s).\n", .{cleaned_tasks});
+        if (cleaned_goals > 0) {
+            try stdout.print("Cleaned {d} resolved goal(s).\n", .{cleaned_goals});
         }
-        if (cleaned_batches > 0) {
-            try stdout.print("Cleaned {d} batch(es).\n", .{cleaned_batches});
+        if (cleaned_dispatches > 0) {
+            try stdout.print("Cleaned {d} dispatch(es).\n", .{cleaned_dispatches});
         }
         try stdout.print("Removed {d} worktrees, {d} branches.\n", .{ cleaned_worktrees, cleaned_branches });
     }
@@ -123,9 +123,9 @@ fn cleanBranch(git: *const GitCli, name: []const u8) u32 {
     return 1;
 }
 
-/// Remove evidence directory for an exploration.
-fn cleanEvidence(aa: Allocator, git_dir: []const u8, exp_id: agx.Ulid) void {
-    const exp_id_str = exp_id.encode();
-    const evidence_dir = std.fmt.allocPrint(aa, "{s}/agx/evidence/{s}", .{ git_dir, &exp_id_str }) catch return;
+/// Remove evidence directory for a task.
+fn cleanEvidence(aa: Allocator, git_dir: []const u8, task_id: agx.Ulid) void {
+    const task_id_str = task_id.encode();
+    const evidence_dir = std.fmt.allocPrint(aa, "{s}/agx/evidence/{s}", .{ git_dir, &task_id_str }) catch return;
     std.fs.cwd().deleteTree(evidence_dir) catch {};
 }

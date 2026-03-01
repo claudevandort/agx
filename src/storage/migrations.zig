@@ -7,20 +7,20 @@ pub const migrations = [_][]const u8{
     \\    applied_at INTEGER NOT NULL
     \\);
     \\
-    \\CREATE TABLE IF NOT EXISTS tasks (
+    \\CREATE TABLE IF NOT EXISTS goals (
     \\    id BLOB PRIMARY KEY,          -- 16-byte ULID
     \\    description TEXT NOT NULL,
     \\    base_commit TEXT NOT NULL,
     \\    base_branch TEXT NOT NULL,
     \\    status TEXT NOT NULL DEFAULT 'active',
-    \\    resolved_exploration_id BLOB,
+    \\    resolved_task_id BLOB,
     \\    created_at INTEGER NOT NULL,
     \\    updated_at INTEGER NOT NULL
     \\);
     \\
-    \\CREATE TABLE IF NOT EXISTS explorations (
+    \\CREATE TABLE IF NOT EXISTS tasks (
     \\    id BLOB PRIMARY KEY,
-    \\    task_id BLOB NOT NULL REFERENCES tasks(id),
+    \\    goal_id BLOB NOT NULL REFERENCES goals(id),
     \\    idx INTEGER NOT NULL,
     \\    worktree_path TEXT NOT NULL,
     \\    branch_name TEXT NOT NULL,
@@ -33,7 +33,7 @@ pub const migrations = [_][]const u8{
     \\
     \\CREATE TABLE IF NOT EXISTS sessions (
     \\    id BLOB PRIMARY KEY,
-    \\    exploration_id BLOB NOT NULL REFERENCES explorations(id),
+    \\    exploration_id BLOB NOT NULL REFERENCES tasks(id),
     \\    agent_type TEXT,
     \\    model_version TEXT,
     \\    environment_fingerprint TEXT,
@@ -53,7 +53,7 @@ pub const migrations = [_][]const u8{
     \\
     \\CREATE TABLE IF NOT EXISTS evidence (
     \\    id BLOB PRIMARY KEY,
-    \\    exploration_id BLOB NOT NULL REFERENCES explorations(id),
+    \\    exploration_id BLOB NOT NULL REFERENCES tasks(id),
     \\    kind TEXT NOT NULL,
     \\    status TEXT NOT NULL,
     \\    hash TEXT,
@@ -70,10 +70,10 @@ pub const migrations = [_][]const u8{
     \\    created_at INTEGER NOT NULL
     \\);
     \\
-    \\CREATE INDEX IF NOT EXISTS idx_explorations_task ON explorations(task_id);
-    \\CREATE INDEX IF NOT EXISTS idx_sessions_exploration ON sessions(exploration_id);
+    \\CREATE INDEX IF NOT EXISTS idx_tasks_goal ON tasks(goal_id);
+    \\CREATE INDEX IF NOT EXISTS idx_sessions_task ON sessions(exploration_id);
     \\CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
-    \\CREATE INDEX IF NOT EXISTS idx_evidence_exploration ON evidence(exploration_id);
+    \\CREATE INDEX IF NOT EXISTS idx_evidence_task ON evidence(exploration_id);
     \\CREATE INDEX IF NOT EXISTS idx_snapshots_session ON snapshots(session_id);
     ,
     // Migration 1: ingest offset tracking
@@ -84,7 +84,7 @@ pub const migrations = [_][]const u8{
     \\);
     ,
     // Migration 2: schema constraints
-    \\CREATE UNIQUE INDEX IF NOT EXISTS idx_explorations_task_idx ON explorations(task_id, idx);
+    \\CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_goal_idx ON tasks(goal_id, idx);
     \\
     ,
     // Migration 3: FTS5 full-text search index
@@ -98,8 +98,8 @@ pub const migrations = [_][]const u8{
     \\);
     \\
     ,
-    // Migration 4: Batch entity + batch_id on tasks
-    \\CREATE TABLE IF NOT EXISTS batches (
+    // Migration 4: Dispatch entity + dispatch_id on goals
+    \\CREATE TABLE IF NOT EXISTS dispatches (
     \\    id BLOB PRIMARY KEY,
     \\    description TEXT NOT NULL,
     \\    base_commit TEXT NOT NULL,
@@ -111,12 +111,12 @@ pub const migrations = [_][]const u8{
     \\    updated_at INTEGER NOT NULL
     \\);
     \\
-    \\ALTER TABLE tasks ADD COLUMN batch_id BLOB REFERENCES batches(id);
-    \\CREATE INDEX IF NOT EXISTS idx_tasks_batch ON tasks(batch_id);
+    \\ALTER TABLE goals ADD COLUMN dispatch_id BLOB REFERENCES dispatches(id);
+    \\CREATE INDEX IF NOT EXISTS idx_goals_dispatch ON goals(dispatch_id);
     \\
     ,
-    // Migration 5: merge progress tracking for resumable batch merges
-    \\ALTER TABLE batches ADD COLUMN merge_progress INTEGER NOT NULL DEFAULT 0;
+    // Migration 5: merge progress tracking for resumable dispatch merges
+    \\ALTER TABLE dispatches ADD COLUMN merge_progress INTEGER NOT NULL DEFAULT 0;
     \\
     ,
 };

@@ -9,30 +9,30 @@ Requires **Zig 0.15.2**. No external dependencies — SQLite 3.47.2 is vendored 
 ```bash
 zig build              # builds zig-out/bin/agx
 zig build test         # runs all unit tests (co-located in source files)
-zig build run -- <cmd> # build and run, e.g. zig build run -- status
+zig build run -- <cmd> # build and run, e.g. zig build run -- exploration status
 ```
 
 Tests are embedded in source files (not in `test/`). `src/agx.zig` uses `testing.refAllDecls` to pull in all module tests transitively. Files with tests: `store.zig`, `ulid.zig`, `ingest.zig`, `json_writer.zig`.
 
 ## What agx Does
 
-Agent-aware version control layered on git. When multiple AI agents work the same task in parallel worktrees, agx tracks each exploration's sessions, events, and evidence, then helps compare results and merge the best one back.
+Agent-aware version control layered on git. When multiple AI agents work the same goal in parallel worktrees, agx tracks each task's sessions, events, and evidence, then helps compare results and merge the best one back.
 
-**Data hierarchy:** Task → Exploration → Session → Event (plus Evidence and Snapshot off Session/Exploration).
+**Data hierarchy:** Goal → Task → Session → Event (plus Evidence and Snapshot off Session/Task).
 
 **Storage:** `.git/agx/db.sqlite3` (SQLite, local/untracked). Context exports go to `.agx/context/` (tracked/shared).
 
 ## Architecture
 
 ### CLI dispatch
-`src/main.zig` — `std.StaticStringMap` maps command names to handler functions. All commands share the signature `fn run(Allocator, []const[]const u8, *std.Io.Writer, *std.Io.Writer) anyerror!void`. Stdout/stderr are 4KB-buffered and must be explicitly flushed.
+`src/main.zig` — `std.StaticStringMap` maps top-level command names to handler functions. `exploration` and `dispatch` are subcommand routers (see `src/cli/exploration.zig`, `src/cli/dispatch.zig`). All commands share the signature `fn run(Allocator, []const[]const u8, *std.Io.Writer, *std.Io.Writer) anyerror!void`. Stdout/stderr are 4KB-buffered and must be explicitly flushed.
 
 ### Module layers
-- **`src/core/`** — Entity structs (Task, Exploration, Session, Event, Evidence, Snapshot) + ULID. Pure data, no I/O.
+- **`src/core/`** — Entity structs (Goal, Task, Session, Event, Evidence, Snapshot, Dispatch) + ULID. Pure data, no I/O.
 - **`src/storage/`** — `Store` wraps SQLite. `migrations.zig` runs versioned schema changes. `export.zig` writes context files.
 - **`src/git/cli.zig`** — `GitCli` shells out to `git` binary. All ops accept optional repo path.
-- **`src/cli/`** — One file per command + `cli_common.zig` (`CliContext` bundles git/store init).
-- **`src/compare/`** — `metrics.zig` collects per-exploration stats, `renderer.zig` outputs table or JSON.
+- **`src/cli/`** — One file per command + `cli_common.zig` (`CliContext` bundles git/store init). `exploration.zig` and `dispatch.zig` are subcommand routers.
+- **`src/compare/`** — `metrics.zig` collects per-task stats, `renderer.zig` outputs table or JSON.
 - **`src/daemon/`** — `ingest.zig` parses JSONL event files, `file_watcher.zig` polls for new data.
 - **`src/util/`** — `json_writer.zig` (shared streaming JSON writer with comma tracking).
 - **`src/sqlite.zig`** — Hand-written Zig bindings for the vendored SQLite C API.
@@ -42,7 +42,7 @@ Agent-aware version control layered on git. When multiple AI agents work the sam
 
 **Arena allocators** — Every CLI command creates `ArenaAllocator`, passes `arena.allocator()` through. Single `defer arena.deinit()` frees everything. Core structs do NOT have `deinit` methods.
 
-**Fixed-size stack buffers for queries** — Store methods take caller-supplied `buf: []T` (e.g., `var buf: [32]Exploration = undefined`). No dynamic allocation in query paths.
+**Fixed-size stack buffers for queries** — Store methods take caller-supplied `buf: []T` (e.g., `var buf: [32]Task = undefined`). No dynamic allocation in query paths.
 
 **Cached prepared statements** — Five hot-path SQLite statements are cached on the `Store` struct and reused via `getCached()` with reset. Methods with dynamic SQL (e.g., filtered queries) still use one-shot prepare/finalize.
 
@@ -52,9 +52,16 @@ Agent-aware version control layered on git. When multiple AI agents work the sam
 
 **`JsonWriter`** — Tracks comma state internally. Use `beginObject`/`endObject`, field methods like `stringField`, `intField`, `rawField`. For JSONL output, create a fresh `JsonWriter` per line.
 
+### Dispatch workflow
+- `dispatch create` creates goals + worktrees + branches (`agx/dispatch-{id}/{index}`)
+- `dispatch merge` squash-merges goals sequentially in least-overlap-first order, tracking progress in `merge_progress`
+- `dispatch merge --continue` resumes after conflict resolution (commits the resolved merge, advances progress)
+- `dispatch cancel` aborts any in-progress merge and sets dispatch status to `abandoned`
+- `DispatchStatus` enum: `active` → `merging` → `completed` | `conflict` | `failed` | `abandoned`
+
 ### Git conventions
-- Branch naming: `agx/{task_id_short_6}/{index}` (e.g., `agx/01JK7M/2`)
-- Commit trailers: `AGX-Task`, `AGX-Exploration`, `AGX-Agent`, `AGX-Model`
+- Branch naming: `agx/{goal_id_short_6}/{index}` (e.g., `agx/01JK7M/2`), dispatch branches: `agx/dispatch-{dispatch_id}/{index}`
+- Commit trailers: `AGX-Goal`, `AGX-Task`, `AGX-Agent`, `AGX-Model`, `AGX-Dispatch`
 - Agent event files: `.git/agx/events/{session_id}.jsonl`
 - Session discovery: `.agx-session` file in each worktree root
 

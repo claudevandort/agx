@@ -1,7 +1,7 @@
 const std = @import("std");
 const Ulid = @import("ulid.zig").Ulid;
 
-pub const BatchStatus = enum {
+pub const DispatchStatus = enum {
     active,
     merging,
     conflict,
@@ -9,12 +9,12 @@ pub const BatchStatus = enum {
     failed,
     abandoned,
 
-    pub fn toStr(self: BatchStatus) []const u8 {
+    pub fn toStr(self: DispatchStatus) []const u8 {
         return @tagName(self);
     }
 
-    pub fn fromStr(s: []const u8) !BatchStatus {
-        inline for (@typeInfo(BatchStatus).@"enum".fields) |f| {
+    pub fn fromStr(s: []const u8) !DispatchStatus {
+        inline for (@typeInfo(DispatchStatus).@"enum".fields) |f| {
             if (std.mem.eql(u8, s, f.name)) return @enumFromInt(f.value);
         }
         return error.InvalidStatus;
@@ -38,15 +38,15 @@ pub const MergePolicy = enum {
     }
 };
 
-pub const Batch = struct {
+pub const Dispatch = struct {
     id: Ulid,
     description: []const u8,
     base_commit: []const u8,
     base_branch: []const u8,
-    status: BatchStatus,
+    status: DispatchStatus,
     merge_policy: MergePolicy,
-    merge_order: ?[]const u8, // JSON array of task ULID strings, set at merge time
-    merge_progress: u32, // number of tasks successfully merged so far
+    merge_order: ?[]const u8, // JSON array of goal ULID strings, set at merge time
+    merge_progress: u32, // number of goals successfully merged so far
     created_at: i64,
     updated_at: i64,
 };

@@ -1,17 +1,17 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const Goal = @import("../core/goal.zig").Goal;
 const Task = @import("../core/task.zig").Task;
-const Exploration = @import("../core/exploration.zig").Exploration;
-const ExplorationStatus = @import("../core/exploration.zig").ExplorationStatus;
+const TaskStatus = @import("../core/task.zig").TaskStatus;
 const Evidence = @import("../core/evidence.zig").Evidence;
 const Session = @import("../core/session.zig").Session;
 const Store = @import("../storage/store.zig").Store;
 const GitCli = @import("../git/cli.zig").GitCli;
 
-/// Per-exploration metrics relative to the task's base_commit.
-pub const ExplorationMetrics = struct {
+/// Per-task metrics relative to the goal's base_commit.
+pub const TaskMetrics = struct {
     index: u32,
-    status: ExplorationStatus,
+    status: TaskStatus,
     approach: ?[]const u8,
     summary: ?[]const u8,
 
@@ -43,23 +43,23 @@ pub const ExplorationMetrics = struct {
     // Errors
     error_count: u32,
 
-    pub fn toStr(self: *const ExplorationMetrics) []const u8 {
+    pub fn toStr(self: *const TaskMetrics) []const u8 {
         return self.status.toStr();
     }
 };
 
-/// Collect metrics for all explorations of a task.
+/// Collect metrics for all tasks of a goal.
 pub fn collectMetrics(
     alloc: Allocator,
     store: *Store,
-    task: *const Task,
-    explorations: []const Exploration,
-) ![]ExplorationMetrics {
-    const metrics = try alloc.alloc(ExplorationMetrics, explorations.len);
+    g: *const Goal,
+    tasks: []const Task,
+) ![]TaskMetrics {
+    const metrics = try alloc.alloc(TaskMetrics, tasks.len);
     errdefer alloc.free(metrics);
 
-    for (explorations, 0..) |exp, i| {
-        metrics[i] = try collectOne(alloc, store, task, &exp);
+    for (tasks, 0..) |t, i| {
+        metrics[i] = try collectOne(alloc, store, g, &t);
     }
 
     return metrics;
@@ -68,10 +68,10 @@ pub fn collectMetrics(
 fn collectOne(
     alloc: Allocator,
     store: *Store,
-    task: *const Task,
-    exp: *const Exploration,
-) !ExplorationMetrics {
-    const git = GitCli.init(alloc, exp.worktree_path);
+    g: *const Goal,
+    t: *const Task,
+) !TaskMetrics {
+    const git = GitCli.init(alloc, t.worktree_path);
 
     // Git diff stats relative to base commit
     var files_changed: u32 = 0;
@@ -79,7 +79,7 @@ fn collectOne(
     var lines_removed: u32 = 0;
     var changed_files_list: std.ArrayList([]const u8) = .empty;
 
-    if (git.diffNumstat(task.base_commit, "HEAD")) |numstat| {
+    if (git.diffNumstat(g.base_commit, "HEAD")) |numstat| {
         defer alloc.free(numstat);
         var lines = std.mem.splitScalar(u8, numstat, '\n');
         while (lines.next()) |line| {
@@ -103,7 +103,7 @@ fn collectOne(
 
     // Files created (Added)
     var files_created: u32 = 0;
-    if (git.diffFilter(task.base_commit, "HEAD", "A")) |added| {
+    if (git.diffFilter(g.base_commit, "HEAD", "A")) |added| {
         defer alloc.free(added);
         var lines = std.mem.splitScalar(u8, added, '\n');
         while (lines.next()) |line| {
@@ -113,7 +113,7 @@ fn collectOne(
 
     // Files deleted
     var files_deleted: u32 = 0;
-    if (git.diffFilter(task.base_commit, "HEAD", "D")) |deleted| {
+    if (git.diffFilter(g.base_commit, "HEAD", "D")) |deleted| {
         defer alloc.free(deleted);
         var lines = std.mem.splitScalar(u8, deleted, '\n');
         while (lines.next()) |line| {
@@ -122,11 +122,11 @@ fn collectOne(
     } else |_| {}
 
     // Commit count
-    const commit_count = git.commitCount(task.base_commit, "HEAD") catch 0;
+    const commit_count = git.commitCount(g.base_commit, "HEAD") catch 0;
 
     // Evidence
     var ev_buf: [64]Evidence = undefined;
-    const evidence = try store.getEvidenceByExploration(exp.id, &ev_buf);
+    const evidence = try store.getEvidenceByTask(t.id, &ev_buf);
 
     var tests_pass: u32 = 0;
     var tests_fail: u32 = 0;
@@ -150,11 +150,11 @@ fn collectOne(
 
     // Session info (use first session)
     var sess_buf: [8]Session = undefined;
-    const sessions = try store.getSessionsByExploration(exp.id, &sess_buf);
+    const sessions = try store.getSessionsByTask(t.id, &sess_buf);
 
     var agent_type: ?[]const u8 = null;
     var model_version: ?[]const u8 = null;
-    var started_at: i64 = exp.created_at;
+    var started_at: i64 = t.created_at;
     var ended_at: ?i64 = null;
 
     if (sessions.len > 0) {
@@ -168,14 +168,14 @@ fn collectOne(
     }
 
     // Error count
-    const error_count_raw = store.countErrorsByExploration(exp.id) catch 0;
+    const error_count_raw = store.countErrorsByTask(t.id) catch 0;
     const error_count: u32 = if (error_count_raw < 0) 0 else @intCast(@min(error_count_raw, std.math.maxInt(u32)));
 
     return .{
-        .index = exp.index,
-        .status = exp.status,
-        .approach = if (exp.approach) |a| try alloc.dupe(u8, a) else null,
-        .summary = if (exp.summary) |s| try alloc.dupe(u8, s) else null,
+        .index = t.index,
+        .status = t.status,
+        .approach = if (t.approach) |a| try alloc.dupe(u8, a) else null,
+        .summary = if (t.summary) |s| try alloc.dupe(u8, s) else null,
         .files_changed = files_changed,
         .files_created = files_created,
         .files_deleted = files_deleted,

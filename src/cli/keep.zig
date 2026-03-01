@@ -24,14 +24,14 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     }
 
     if (index_str == null) {
-        try stderr.print("error: exploration index required\n", .{});
-        try stderr.print("usage: agx keep <index> [--strategy merge|rebase|squash|cherry-pick] [--no-context] [--no-cleanup]\n", .{});
+        try stderr.print("error: task index required\n", .{});
+        try stderr.print("usage: agx exploration pick <index> [--strategy merge|rebase|squash|cherry-pick] [--no-context] [--no-cleanup]\n", .{});
         try stderr.flush();
         std.process.exit(1);
     }
 
     const index = std.fmt.parseInt(u32, index_str.?, 10) catch {
-        try stderr.print("error: invalid exploration index '{s}'\n", .{index_str.?});
+        try stderr.print("error: invalid task index '{s}'\n", .{index_str.?});
         try stderr.flush();
         std.process.exit(1);
     };
@@ -53,32 +53,32 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     var ctx = CliContext.open(aa, stderr);
     defer ctx.deinit();
 
-    const task = ctx.store.getActiveTask() catch {
-        try stderr.print("error: no active task found\n", .{});
+    const g = ctx.store.getActiveGoal() catch {
+        try stderr.print("error: no active goal found\n", .{});
         try stderr.flush();
         std.process.exit(1);
         unreachable;
     };
 
-    const exp = ctx.store.getExplorationByIndex(task.id, index) catch {
-        try stderr.print("error: exploration [{d}] not found\n", .{index});
+    const t = ctx.store.getTaskByIndex(g.id, index) catch {
+        try stderr.print("error: task [{d}] not found\n", .{index});
         try stderr.flush();
         std.process.exit(1);
         unreachable;
     };
 
     // Checkout base branch
-    try stdout.print("Checking out {s}...\n", .{task.base_branch});
-    ctx.git.checkout(task.base_branch) catch {
-        try stderr.print("error: could not checkout base branch '{s}'\n", .{task.base_branch});
+    try stdout.print("Checking out {s}...\n", .{g.base_branch});
+    ctx.git.checkout(g.base_branch) catch {
+        try stderr.print("error: could not checkout base branch '{s}'\n", .{g.base_branch});
         try stderr.flush();
         std.process.exit(1);
     };
 
-    // Merge exploration branch
+    // Merge task branch
     const strategy_name: []const u8 = if (strategy_str) |s| s else "merge";
     try stdout.print("Merging [{d}] via {s}...\n", .{ index, strategy_name });
-    ctx.git.mergeBranch(exp.branch_name, strategy) catch {
+    ctx.git.mergeBranch(t.branch_name, strategy) catch {
         try stderr.print("error: merge failed — resolve conflicts manually\n", .{});
         try stderr.flush();
         std.process.exit(1);
@@ -86,24 +86,24 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
 
     // Add commit trailers
     var sess_buf: [8]agx.Session = undefined;
-    const sessions = ctx.store.getSessionsByExploration(exp.id, &sess_buf) catch &[_]agx.Session{};
+    const sessions = ctx.store.getSessionsByTask(t.id, &sess_buf) catch &[_]agx.Session{};
 
-    const task_short = task.id.short(6);
+    const goal_short = g.id.short(6);
 
     // Build trailers dynamically
-    var trailer_count: usize = 2; // AGX-Task + AGX-Exploration always
+    var trailer_count: usize = 2; // AGX-Goal + AGX-Task always
     if (sessions.len > 0 and sessions[0].agent_type != null) trailer_count += 1;
     if (sessions.len > 0 and sessions[0].model_version != null) trailer_count += 1;
 
     const trailers = try aa.alloc([2][]const u8, trailer_count);
 
     var ti: usize = 0;
-    trailers[ti] = .{ "AGX-Task", &task_short };
+    trailers[ti] = .{ "AGX-Goal", &goal_short };
     ti += 1;
 
     var idx_buf: [16]u8 = undefined;
     const idx_str = std.fmt.bufPrint(&idx_buf, "{d}", .{index}) catch "?";
-    trailers[ti] = .{ "AGX-Exploration", idx_str };
+    trailers[ti] = .{ "AGX-Task", idx_str };
     ti += 1;
 
     if (sessions.len > 0) {
@@ -122,16 +122,16 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         try stderr.flush();
     };
 
-    // Update DB: mark exploration as kept, resolve task
-    try ctx.store.updateExplorationStatus(exp.id, .kept, null);
-    try ctx.store.updateTaskStatus(task.id, .resolved, exp.id);
+    // Update DB: mark task as kept, resolve goal
+    try ctx.store.updateTaskStatus(t.id, .kept, null);
+    try ctx.store.updateGoalStatus(g.id, .resolved, t.id);
 
     // Export context (default on, skip with --no-context)
     if (!no_context) {
-        if (agx.context_export.exportTaskContext(
+        if (agx.context_export.exportGoalContext(
             aa,
             &ctx.store,
-            &task,
+            &g,
             ".agx/context",
         )) |context_dir| {
             try stdout.print("Context exported to {s}\n", .{context_dir});
@@ -144,19 +144,19 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     // Cleanup worktrees unless --no-cleanup
     if (!no_cleanup) {
         try stdout.print("Cleaning up worktrees...\n", .{});
-        var exp_buf: [32]agx.Exploration = undefined;
-        const all_exps = try ctx.store.getExplorationsByTask(task.id, &exp_buf);
+        var task_buf: [32]agx.Task = undefined;
+        const all_tasks = try ctx.store.getTasksByGoal(g.id, &task_buf);
 
-        for (all_exps) |e| {
+        for (all_tasks) |e| {
             ctx.git.removeWorktree(e.worktree_path) catch {};
             // Delete non-kept branches
             if (e.index != index) {
                 ctx.git.deleteBranch(e.branch_name) catch {};
-                try ctx.store.updateExplorationStatus(e.id, .discarded, null);
+                try ctx.store.updateTaskStatus(e.id, .discarded, null);
             }
         }
     }
 
-    try stdout.print("Exploration [{d}] merged into {s}.\n", .{ index, task.base_branch });
+    try stdout.print("Task [{d}] merged into {s}.\n", .{ index, g.base_branch });
     try stdout.flush();
 }

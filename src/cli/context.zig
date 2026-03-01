@@ -6,12 +6,12 @@ const Frontmatter = fm_mod.Frontmatter;
 const CliContext = @import("cli_common.zig").CliContext;
 const JsonWriter = agx.json_writer.JsonWriter;
 
-/// `agx context` — query archived exploration context in `.agx/context/`.
+/// `agx context` — query archived task context in `.agx/context/`.
 /// Uses FTS5 full-text search when a database is available, falls back to
 /// file-based substring matching otherwise.
 ///
 /// Subcommands:
-///   list                  Show a table of all archived task contexts
+///   list                  Show a table of all archived goal contexts
 ///   search <query>        Search across context files (metadata + content)
 ///   reindex               Rebuild the FTS search index
 
@@ -21,8 +21,8 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     const aa = arena.allocator();
 
     // Find repo root via git
-    const git = agx.GitCli.init(aa, null);
-    const repo_root = git.repoRoot() catch {
+    const git_ = agx.GitCli.init(aa, null);
+    const repo_root = git_.repoRoot() catch {
         try stderr.print("error: not a git repository\n", .{});
         try stderr.flush();
         std.process.exit(1);
@@ -66,20 +66,20 @@ fn printUsage(w: *std.Io.Writer) !void {
         \\Usage: agx context <subcommand> [options]
         \\
         \\Subcommands:
-        \\  export [--task <id>] [--batch <id>]
-        \\                          Export task or batch context to .agx/context/
-        \\  list                    List archived task contexts
+        \\  export [--goal <id>] [--dispatch <id>]
+        \\                          Export goal or dispatch context to .agx/context/
+        \\  list                    List archived goal contexts
         \\  search <query>          Search context files (FTS5 ranked search)
         \\  reindex                 Rebuild the FTS search index
         \\
         \\List options:
-        \\  --status <status>       Filter by task status (active, resolved, abandoned)
+        \\  --status <status>       Filter by goal status (active, resolved, abandoned)
         \\
         \\Search options:
         \\  --json                  Output results as JSON (for LLM piping)
         \\  --limit N               Max results (default 20)
-        \\  --task <id>             Filter by task ID prefix (file-based fallback only)
-        \\  --status <status>       Filter by task status (file-based fallback only)
+        \\  --goal <id>             Filter by goal ID prefix (file-based fallback only)
+        \\  --status <status>       Filter by goal status (file-based fallback only)
         \\
     , .{});
 }
@@ -95,33 +95,33 @@ fn runExport(
 ) !void {
     _ = context_dir;
 
-    var task_filter: ?[]const u8 = null;
-    var batch_filter: ?[]const u8 = null;
+    var goal_filter: ?[]const u8 = null;
+    var dispatch_filter: ?[]const u8 = null;
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
-        if (std.mem.eql(u8, args[i], "--task")) {
+        if (std.mem.eql(u8, args[i], "--goal")) {
             i += 1;
             if (i < args.len) {
-                task_filter = args[i];
+                goal_filter = args[i];
             } else {
-                try stderr.print("error: --task requires a task ID prefix\n", .{});
+                try stderr.print("error: --goal requires a goal ID prefix\n", .{});
                 try stderr.flush();
                 std.process.exit(1);
             }
-        } else if (std.mem.eql(u8, args[i], "--batch")) {
+        } else if (std.mem.eql(u8, args[i], "--dispatch")) {
             i += 1;
             if (i < args.len) {
-                batch_filter = args[i];
+                dispatch_filter = args[i];
             } else {
-                try stderr.print("error: --batch requires a batch ID prefix\n", .{});
+                try stderr.print("error: --dispatch requires a dispatch ID prefix\n", .{});
                 try stderr.flush();
                 std.process.exit(1);
             }
         }
     }
 
-    if (task_filter != null and batch_filter != null) {
-        try stderr.print("error: --task and --batch are mutually exclusive\n", .{});
+    if (goal_filter != null and dispatch_filter != null) {
+        try stderr.print("error: --goal and --dispatch are mutually exclusive\n", .{});
         try stderr.flush();
         std.process.exit(1);
     }
@@ -129,65 +129,65 @@ fn runExport(
     var ctx = CliContext.open(aa, stderr);
     defer ctx.deinit();
 
-    if (batch_filter) |prefix| {
-        // Find batch by prefix match
-        var batch_buf: [32]agx.Batch = undefined;
-        const all_batches = ctx.store.getAllBatches(&batch_buf) catch {
-            try stderr.print("error: could not query batches\n", .{});
+    if (dispatch_filter) |prefix| {
+        // Find dispatch by prefix match
+        var dispatch_buf: [32]agx.Dispatch = undefined;
+        const all_dispatches = ctx.store.getAllDispatches(&dispatch_buf) catch {
+            try stderr.print("error: could not query dispatches\n", .{});
             try stderr.flush();
             std.process.exit(1);
         };
 
-        var matched: ?agx.Batch = null;
-        for (all_batches) |b| {
-            const enc = b.id.encode();
+        var matched: ?agx.Dispatch = null;
+        for (all_dispatches) |d| {
+            const enc = d.id.encode();
             if (std.mem.startsWith(u8, &enc, prefix)) {
                 if (matched != null) {
-                    try stderr.print("error: ambiguous batch prefix '{s}' — matches multiple batches\n", .{prefix});
+                    try stderr.print("error: ambiguous dispatch prefix '{s}' — matches multiple dispatches\n", .{prefix});
                     try stderr.flush();
                     std.process.exit(1);
                 }
-                matched = b;
+                matched = d;
             }
         }
 
-        if (matched) |b| {
-            if (agx.context_export.exportBatchContext(aa, &ctx.store, &b, ".agx/context")) |dir| {
-                try stdout.print("Batch context exported to {s}\n", .{dir});
+        if (matched) |d| {
+            if (agx.context_export.exportDispatchContext(aa, &ctx.store, &d, ".agx/context")) |dir| {
+                try stdout.print("Dispatch context exported to {s}\n", .{dir});
             } else |err| {
-                try stderr.print("error: could not export batch context: {s}\n", .{@errorName(err)});
+                try stderr.print("error: could not export dispatch context: {s}\n", .{@errorName(err)});
                 try stderr.flush();
                 std.process.exit(1);
             }
         } else {
-            try stderr.print("error: no batch matching prefix '{s}'\n", .{prefix});
+            try stderr.print("error: no dispatch matching prefix '{s}'\n", .{prefix});
             try stderr.flush();
             std.process.exit(1);
         }
-    } else if (task_filter) |prefix| {
-        // Find task by prefix match
-        var task_buf: [64]agx.Task = undefined;
-        const all_tasks = ctx.store.getAllTasks(&task_buf) catch {
-            try stderr.print("error: could not query tasks\n", .{});
+    } else if (goal_filter) |prefix| {
+        // Find goal by prefix match
+        var goal_buf: [64]agx.Goal = undefined;
+        const all_goals = ctx.store.getAllGoals(&goal_buf) catch {
+            try stderr.print("error: could not query goals\n", .{});
             try stderr.flush();
             std.process.exit(1);
         };
 
-        var matched: ?agx.Task = null;
-        for (all_tasks) |t| {
-            const enc = t.id.encode();
+        var matched: ?agx.Goal = null;
+        for (all_goals) |g| {
+            const enc = g.id.encode();
             if (std.mem.startsWith(u8, &enc, prefix)) {
                 if (matched != null) {
-                    try stderr.print("error: ambiguous task prefix '{s}' — matches multiple tasks\n", .{prefix});
+                    try stderr.print("error: ambiguous goal prefix '{s}' — matches multiple goals\n", .{prefix});
                     try stderr.flush();
                     std.process.exit(1);
                 }
-                matched = t;
+                matched = g;
             }
         }
 
-        if (matched) |t| {
-            if (agx.context_export.exportTaskContext(aa, &ctx.store, &t, ".agx/context")) |dir| {
+        if (matched) |g| {
+            if (agx.context_export.exportGoalContext(aa, &ctx.store, &g, ".agx/context")) |dir| {
                 try stdout.print("Context exported to {s}\n", .{dir});
             } else |err| {
                 try stderr.print("error: could not export context: {s}\n", .{@errorName(err)});
@@ -195,19 +195,19 @@ fn runExport(
                 std.process.exit(1);
             }
         } else {
-            try stderr.print("error: no task matching prefix '{s}'\n", .{prefix});
+            try stderr.print("error: no goal matching prefix '{s}'\n", .{prefix});
             try stderr.flush();
             std.process.exit(1);
         }
     } else {
-        // Default: export active task
-        const task = ctx.store.getActiveTask() catch {
-            try stderr.print("error: no active task found (use --task <id> to specify)\n", .{});
+        // Default: export active goal
+        const g = ctx.store.getActiveGoal() catch {
+            try stderr.print("error: no active goal found (use --goal <id> to specify)\n", .{});
             try stderr.flush();
             std.process.exit(1);
         };
 
-        if (agx.context_export.exportTaskContext(aa, &ctx.store, &task, ".agx/context")) |dir| {
+        if (agx.context_export.exportGoalContext(aa, &ctx.store, &g, ".agx/context")) |dir| {
             try stdout.print("Context exported to {s}\n", .{dir});
         } else |err| {
             try stderr.print("error: could not export context: {s}\n", .{@errorName(err)});
@@ -226,7 +226,7 @@ const ContextEntry = struct {
     full_content: []const u8,
 };
 
-/// Scan .agx/context/ for task directories containing summary.md with frontmatter.
+/// Scan .agx/context/ for goal directories containing summary.md with frontmatter.
 fn scanContextDir(aa: Allocator, context_dir: []const u8) ![]ContextEntry {
     var entries = std.ArrayList(ContextEntry).empty;
 
@@ -280,7 +280,7 @@ fn runList(
     }
 
     // Print header
-    try stdout.print("{s:<28} {s:<12} {s:<20} {s}\n", .{ "TASK ID", "STATUS", "BRANCH", "DESCRIPTION" });
+    try stdout.print("{s:<28} {s:<12} {s:<20} {s}\n", .{ "GOAL ID", "STATUS", "BRANCH", "DESCRIPTION" });
     try stdout.print("{s:<28} {s:<12} {s:<20} {s}\n", .{ "-------", "------", "------", "-----------" });
 
     for (entries) |entry| {
@@ -291,7 +291,7 @@ fn runList(
             } else continue;
         }
 
-        const task_id = entry.fm.task_id orelse entry.dir_name;
+        const goal_id = entry.fm.task_id orelse entry.dir_name;
         const status = entry.fm.status orelse "-";
         const branch = entry.fm.base_branch orelse "-";
         const desc = entry.fm.description orelse "-";
@@ -300,7 +300,7 @@ fn runList(
         const max_desc: usize = 50;
         const desc_display = if (desc.len > max_desc) desc[0..max_desc] else desc;
 
-        try stdout.print("{s:<28} {s:<12} {s:<20} {s}\n", .{ task_id, status, branch, desc_display });
+        try stdout.print("{s:<28} {s:<12} {s:<20} {s}\n", .{ goal_id, status, branch, desc_display });
     }
 }
 
@@ -313,18 +313,18 @@ fn runSearch(
     stdout: *std.Io.Writer,
     stderr: *std.Io.Writer,
 ) !void {
-    // Parse args: search <query> [--json] [--limit N] [--task <id>] [--status <status>]
+    // Parse args: search <query> [--json] [--limit N] [--goal <id>] [--status <status>]
     var query: ?[]const u8 = null;
-    var task_filter: ?[]const u8 = null;
+    var goal_filter: ?[]const u8 = null;
     var status_filter: ?[]const u8 = null;
     var json_output = false;
     var limit: u32 = 20;
 
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
-        if (std.mem.eql(u8, args[i], "--task")) {
+        if (std.mem.eql(u8, args[i], "--goal")) {
             i += 1;
-            if (i < args.len) task_filter = args[i];
+            if (i < args.len) goal_filter = args[i];
         } else if (std.mem.eql(u8, args[i], "--status")) {
             i += 1;
             if (i < args.len) status_filter = args[i];
@@ -340,7 +340,7 @@ fn runSearch(
         }
     }
 
-    if (query == null and task_filter == null and status_filter == null) {
+    if (query == null and goal_filter == null and status_filter == null) {
         try stderr.print("agx context search: no query or filters provided\n", .{});
         try stderr.flush();
         std.process.exit(1);
@@ -352,7 +352,7 @@ fn runSearch(
     }
 
     // Fallback: file-based search
-    try runFileSearch(aa, context_dir, query, task_filter, status_filter, stdout, stderr);
+    try runFileSearch(aa, context_dir, query, goal_filter, status_filter, stdout, stderr);
 }
 
 /// Attempt FTS5 search via the database. Returns true if successful.
@@ -381,7 +381,7 @@ fn tryFtsSearch(
             jw.beginObjectValue() catch return false;
             jw.stringField("type", r.entity_type) catch return false;
             jw.stringField("entity_id", r.entity_id) catch return false;
-            jw.stringField("task_id", r.task_id) catch return false;
+            jw.stringField("goal_id", r.task_id) catch return false;
             jw.stringField("snippet", r.snippet) catch return false;
             jw.floatField("rank", r.rank) catch return false;
             jw.endObject() catch return false;
@@ -408,7 +408,7 @@ fn runFileSearch(
     aa: Allocator,
     context_dir: []const u8,
     query: ?[]const u8,
-    task_filter: ?[]const u8,
+    goal_filter: ?[]const u8,
     status_filter: ?[]const u8,
     stdout: *std.Io.Writer,
     stderr: *std.Io.Writer,
@@ -425,9 +425,9 @@ fn runFileSearch(
 
     for (entries) |entry| {
         // Apply metadata filters
-        if (task_filter) |tf| {
+        if (goal_filter) |gf| {
             const eid = entry.fm.task_id orelse entry.dir_name;
-            if (!fm_mod.prefixMatch(eid, tf)) continue;
+            if (!fm_mod.prefixMatch(eid, gf)) continue;
         }
 
         if (status_filter) |sf| {
@@ -443,11 +443,11 @@ fn runFileSearch(
 
         // Print match
         match_count += 1;
-        const task_id = entry.fm.task_id orelse entry.dir_name;
+        const goal_id = entry.fm.task_id orelse entry.dir_name;
         const desc = entry.fm.description orelse "-";
         const status = entry.fm.status orelse "-";
 
-        try stdout.print("--- {s} ({s}) ---\n", .{ task_id, status });
+        try stdout.print("--- {s} ({s}) ---\n", .{ goal_id, status });
         try stdout.print("  {s}\n", .{desc});
 
         // If there was a text query, show matching lines from the body

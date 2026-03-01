@@ -3,4 +3,4 @@
 
 pub const agx_explore_lead = @embedFile(".claude/skills/agx-explore-lead/SKILL.md");
 pub const agx_explore_teammate = @embedFile(".claude/skills/agx-explore-teammate/SKILL.md");
-pub const agx_batch_lead = @embedFile(".claude/skills/agx-batch-lead/SKILL.md");
+pub const agx_dispatch_lead = @embedFile(".claude/skills/agx-dispatch-lead/SKILL.md");

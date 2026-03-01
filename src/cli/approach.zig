@@ -6,7 +6,7 @@ const session_util = @import("session_util.zig");
 pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !void {
     if (args.len == 0) {
         try stderr.print("error: approach description required\n", .{});
-        try stderr.print("usage: agx approach \"description of approach\"\n", .{});
+        try stderr.print("usage: agx exploration approach \"description of approach\"\n", .{});
         try stderr.flush();
         std.process.exit(1);
     }
@@ -26,13 +26,13 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     var store = try agx.Store.init(aa, ctx.db_path);
     defer store.deinit();
 
-    const exp_id = agx.Ulid.decode(ctx.info.exploration_id_str) catch {
-        try stderr.print("error: invalid exploration ID in .agx-session\n", .{});
+    const task_id = agx.Ulid.decode(ctx.info.task_id_str) catch {
+        try stderr.print("error: invalid task ID in .agx-session\n", .{});
         try stderr.flush();
         std.process.exit(1);
     };
 
-    try store.updateExplorationApproach(exp_id, approach);
+    try store.updateTaskApproach(task_id, approach);
 
     try stdout.print("Approach set: {s}\n", .{approach});
     try stdout.flush();

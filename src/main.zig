@@ -1,41 +1,21 @@
 const std = @import("std");
 
 const init_cmd = @import("cli/init.zig");
-const spawn_cmd = @import("cli/spawn.zig");
-const status_cmd = @import("cli/status.zig");
-const done_cmd = @import("cli/done.zig");
-const approach_cmd = @import("cli/approach.zig");
-const evidence_cmd = @import("cli/evidence.zig");
-const compare_cmd = @import("cli/compare.zig");
-const keep_cmd = @import("cli/keep.zig");
-const archive_cmd = @import("cli/archive.zig");
-const discard_cmd = @import("cli/discard.zig");
-const clean_cmd = @import("cli/clean.zig");
 const ingest_cmd = @import("cli/ingest.zig");
 const record_cmd = @import("cli/record.zig");
-const log_cmd = @import("cli/log.zig");
 const context_cmd = @import("cli/context.zig");
-const batch_cmd = @import("cli/batch.zig");
+const exploration_cmd = @import("cli/exploration.zig");
+const dispatch_cmd = @import("cli/dispatch.zig");
 
 const CommandFn = *const fn (std.mem.Allocator, []const []const u8, *std.Io.Writer, *std.Io.Writer) anyerror!void;
 
 const commands = std.StaticStringMap(CommandFn).initComptime(.{
     .{ "init", init_cmd.run },
-    .{ "spawn", spawn_cmd.run },
-    .{ "status", status_cmd.run },
-    .{ "done", done_cmd.run },
-    .{ "approach", approach_cmd.run },
-    .{ "evidence", evidence_cmd.run },
-    .{ "compare", compare_cmd.run },
-    .{ "keep", keep_cmd.run },
-    .{ "archive", archive_cmd.run },
-    .{ "discard", discard_cmd.run },
-    .{ "clean", clean_cmd.run },
+    .{ "exploration", exploration_cmd.run },
+    .{ "dispatch", dispatch_cmd.run },
     .{ "ingest", ingest_cmd.run },
     .{ "record", record_cmd.run },
-    .{ "log", log_cmd.run },
     .{ "context", context_cmd.run },
-    .{ "batch", batch_cmd.run },
 });
 
 // NOTE: CLI commands call std.process.exit(1) on user-facing errors, which skips
@@ -93,24 +73,16 @@ fn printUsage(writer: *std.Io.Writer) !void {
         \\Usage: agx <command> [options]
         \\
         \\Commands:
-        \\  init       Initialize agx in the current git repository
-        \\  spawn      Spawn parallel explorations for a task
-        \\  status     Show active tasks and explorations
-        \\  done       Mark current exploration as complete
-        \\  approach   Set the approach description for current exploration
-        \\  evidence   Record evidence (test results, builds, etc.)
-        \\  compare    Compare explorations side by side
-        \\  keep       Merge an exploration into the base branch
-        \\  archive    Archive an exploration (preserve context)
-        \\  discard    Remove an exploration
-        \\  clean      Remove all resolved task artifacts
-        \\  record     Record an event (CLI-based agent integration)
-        \\  log        View events for an exploration
-        \\  ingest     Ingest events from JSONL files
-        \\  context    Query archived exploration context
-        \\  batch      Multi-task batch execution with conflict-aware merging
-        \\  version    Show version
-        \\  help       Show this help
+        \\  init          Initialize agx in the current git repository
+        \\  exploration   Manage parallel task explorations for a goal
+        \\  dispatch      Multi-goal dispatch execution with conflict-aware merging
+        \\  record        Record an event (CLI-based agent integration)
+        \\  ingest        Ingest events from JSONL files
+        \\  context       Query archived exploration context
+        \\  version       Show version
+        \\  help          Show this help
+        \\
+        \\Run 'agx <command> --help' for details on a specific command.
         \\
     , .{});
 }

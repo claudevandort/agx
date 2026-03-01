@@ -1,9 +1,9 @@
 # agx — Agent-Aware Version Control
 
-`agx` layers agent-aware workflows on top of git. It supports two modes: 
+`agx` layers agent-aware workflows on top of git. It supports two modes:
 
-- **explore** (multiple agents tackle the same task with competing approaches — compare and keep the best)
--  **batch** (multiple independent tasks run in parallel — merge them all back sequentially with conflict-aware ordering). 
+- **explore** (multiple agents tackle the same goal with competing approaches — compare and keep the best)
+-  **dispatch** (multiple independent goals run in parallel — merge them all back sequentially with conflict-aware ordering).
 
 In both modes, `agx` gives each agent an isolated worktree, tracks sessions and evidence, and merges results back with full provenance.
 
@@ -25,41 +25,41 @@ zig build
 cd my-project
 agx init
 
-# Spawn 3 parallel explorations for a task
-agx spawn --task "refactor auth module" --count 3
+# Spawn 3 parallel tasks for a goal
+agx exploration create --goal "refactor auth module" --count 3
 ```
 
 This creates 3 git worktrees, each with its own branch, session, and a `.agx-session` discovery file. Agents (or humans) can now work independently in each worktree.
 
 ## Explore Workflow
 
-One task, N competing approaches. Compare results, keep the best.
+One goal, N competing approaches. Compare results, keep the best.
 
 ### Inside each worktree (agent or human)
 
 ```bash
 # Declare the approach being taken
-agx approach "Extract auth into middleware chain"
+agx exploration approach "Extract auth into middleware chain"
 
 # Record evidence as you go
-agx evidence --kind test_result --status pass --summary "47/47 tests passed"
-agx evidence --kind build_output --status pass --summary "clean build"
+agx exploration evidence --kind test_result --status pass --summary "47/47 tests passed"
+agx exploration evidence --kind build_output --status pass --summary "clean build"
 
 # Record events (for detailed audit trail)
 agx record event --kind tool_call --data '{"tool":"grep","args":"auth"}'
 
-# Mark the exploration complete
-agx done --summary "Refactored auth into express middleware"
+# Mark the task complete
+agx exploration done --summary "Refactored auth into express middleware"
 ```
 
 ### From the main repo (comparing and deciding)
 
 ```bash
-# See the state of all explorations
-agx status
+# See the state of all tasks
+agx exploration status
 
-# Compare explorations side by side
-agx compare
+# Compare tasks side by side
+agx exploration compare
 
 # Example output:
 #  Idx  Status   Files  +Lines  -Lines  Commits  Tests✓  Tests✗  Build  Errors
@@ -68,32 +68,32 @@ agx compare
 #  [3]  active      2      31       8        1        -       -    -       0
 
 # Machine-readable output
-agx compare --format json
+agx exploration compare --format json
 
-# View event log for a specific exploration
-agx log 2
-agx log 2 --kind error --json
+# View event log for a specific task
+agx exploration log 2
+agx exploration log 2 --kind error --json
 
-# Merge the best exploration back to your branch
-agx keep 1
-agx keep 1 --strategy squash          # squash merge
-agx keep 1 --preserve-context         # export session logs to .agx/context/
+# Merge the best task back to your branch
+agx exploration pick 1
+agx exploration pick 1 --strategy squash          # squash merge
+agx exploration pick 1 --preserve-context         # export session logs to .agx/context/
 
 # Clean up
-agx archive 3          # preserve context, remove worktree
-agx discard 2          # remove worktree, no context preserved
-agx clean              # remove all resolved task artifacts
+agx exploration archive 3          # preserve context, remove worktree
+agx exploration discard 2          # remove worktree, no context preserved
+agx exploration clean              # remove all resolved goal artifacts
 ```
 
 ### Merge strategies
 
-`agx keep` supports `--strategy merge` (default), `rebase`, `squash`, and `cherry-pick`.
+`agx exploration pick` supports `--strategy merge` (default), `rebase`, `squash`, and `cherry-pick`.
 
 Merged commits are stamped with git trailers for provenance:
 
 ```
-AGX-Task: 01JK7M
-AGX-Exploration: 1
+AGX-Goal: 01JK7M
+AGX-Task: 1
 AGX-Agent: claude-code
 AGX-Model: claude-sonnet-4-20250514
 ```
@@ -103,42 +103,40 @@ AGX-Model: claude-sonnet-4-20250514
 After using `--preserve-context`, the exported context is searchable:
 
 ```bash
-agx context list                       # list all archived tasks
+agx context list                       # list all archived goals
 agx context list --status resolved     # filter by status
 agx context search "auth middleware"   # search across all context files
-agx context search "test" --task 01JK  # search within a specific task
+agx context search "test" --goal 01JK  # search within a specific goal
 ```
 
 Context files in `.agx/context/` are tracked by git, so the full exploration history is available to anyone who clones the repo — even without `agx init`.
 
-## Batch Workflow
+## Dispatch Workflow
 
-N independent tasks, worked in parallel, merged sequentially with least-conflict-first ordering.
+N independent goals, worked in parallel, merged sequentially with least-conflict-first ordering.
 
 ```bash
-# Create a batch of tasks
-agx batch create --tasks "add auth middleware" "add request logging" "refactor config" --policy autonomous
+# Create a dispatch of goals
+agx dispatch create --goals "add auth middleware" "add request logging" "refactor config" --policy autonomous
 
-# Each task gets its own worktree and branch
-# Batch 01KJJ2: Batch of 3 tasks
-#   [1] 01KJJ2 — add auth middleware        worktree: .git/agx/worktrees/batch-01KJJ2/1
-#   [2] 01KJJ2 — add request logging        worktree: .git/agx/worktrees/batch-01KJJ2/2
-#   [3] 01KJJ2 — refactor config            worktree: .git/agx/worktrees/batch-01KJJ2/3
+# Each goal gets its own worktree and branch
+# Dispatch 01KJJ2: Dispatch of 3 goals
+#   [1] 01KJJ2 — add auth middleware        worktree: .git/agx/worktrees/dispatch-01KJJ2/1
+#   [2] 01KJJ2 — add request logging        worktree: .git/agx/worktrees/dispatch-01KJJ2/2
+#   [3] 01KJJ2 — refactor config            worktree: .git/agx/worktrees/dispatch-01KJJ2/3
 ```
 
-Agents work in each worktree independently. When all tasks are done:
+Agents work in each worktree independently. When all goals are done:
 
 ```bash
-# Check batch status
-agx batch status
-agx batch status --json              # machine-readable output
+# Check dispatch status
+agx dispatch status
 
 # Preview merge order and file overlap
-agx batch merge --dry-run
-agx batch merge --dry-run --json     # machine-readable output
+agx dispatch merge --dry-run
 
 # Example dry-run output:
-# Merge order (3 tasks):
+# Merge order (3 goals):
 #   1. [3] refactor config (2 files changed)
 #   2. [1] add auth middleware (4 files changed)
 #   3. [2] add request logging (3 files changed)
@@ -147,16 +145,26 @@ agx batch merge --dry-run --json     # machine-readable output
 #   [1] <-> [2]: 1 shared file(s)
 
 # Execute the merge
-agx batch merge
+agx dispatch merge
+
+# If a merge has conflicts, resolve them and continue
+git add <resolved files>
+agx dispatch merge --continue
+
+# Cancel an active dispatch (aborts in-progress merges)
+agx dispatch cancel
 ```
 
-agx computes which tasks share the most files and merges the least-overlapping tasks first to minimize conflicts. Each task is squash-merged with `AGX-Batch` and `AGX-Task` trailers.
+agx computes which goals share the most files and merges the least-overlapping goals first to minimize conflicts. Each goal is squash-merged with `AGX-Dispatch` and `AGX-Goal` trailers.
+
+When a merge step has conflicts, the dispatch pauses with `conflict` status. After resolving conflicts and staging files, run `agx dispatch merge --continue` to commit the resolution and continue merging remaining goals.
 
 ### Conflict policies
 
-Set with `--policy` during `batch create`:
+Set with `--policy` during `dispatch create`:
 
 - `autonomous` — the agent resolves all merge conflicts
+- `semi` — the agent resolves trivial conflicts, asks the user for complex ones
 - `manual` — every conflict goes to the user
 
 ## Agent Integration
@@ -166,8 +174,8 @@ Agents can integrate at two levels:
 **CLI-based** — call agx commands directly:
 ```bash
 agx record event --kind tool_call --data '{"tool":"edit","file":"auth.py"}'
-agx evidence --kind test_result --status pass --summary "all tests pass"
-agx done --summary "completed refactoring"
+agx exploration evidence --kind test_result --status pass --summary "all tests pass"
+agx exploration done --summary "completed refactoring"
 ```
 
 **File-based** — append JSONL to the events directory (zero integration required):
@@ -183,23 +191,23 @@ agx ingest --watch      # continuous polling
 **Session discovery** — each worktree contains `.agx-session`:
 ```
 session_id=01JKAB3F...
-exploration_id=01JKAB3G...
-task_id=01JKAB3E...
+task_id=01JKAB3G...
+goal_id=01JKAB3E...
 index=1
 ```
 
 ## Data Model
 
 ```
-Batch (optional) ──< Task (1) ──< Exploration (1) ──< Session (1) ──< Event
-                                                           │
-                                                           ├──< Snapshot
-                                                           └──< Evidence
+Dispatch (optional) ──< Goal (1) ──< Task (1) ──< Session (1) ──< Event
+                                                       │
+                                                       ├──< Snapshot
+                                                       └──< Evidence
 ```
 
-- **Batch** — a group of independent tasks to be merged sequentially (merge policy, merge order, base commit)
-- **Task** — a unit of work with a base commit/branch (optionally belongs to a batch)
-- **Exploration** — one agent's attempt (own worktree + branch)
+- **Dispatch** — a group of independent goals to be merged sequentially (merge policy, merge order, base commit)
+- **Goal** — a unit of work with a base commit/branch (optionally belongs to a dispatch)
+- **Task** — one agent's attempt (own worktree + branch)
 - **Session** — agent working context (agent type, model version, timing)
 - **Event** — individual action (message, tool_call, decision, file_change, git_commit, error)
 - **Evidence** — structured test/build result (kind, status, summary, optional raw output)
@@ -213,10 +221,10 @@ IDs are ULIDs (time-sortable, globally unique).
 .git/agx/                          # Local, not tracked by git
   db.sqlite3                       # SQLite database (WAL mode)
   events/{session_id}.jsonl        # Agent event files (for ingestion)
-  evidence/{exploration_id}/       # Raw evidence outputs
+  evidence/{task_id}/              # Raw evidence outputs
 
 .agx/                              # Tracked by git (for team sharing)
-  context/{task_id}/               # Preserved context from resolved tasks
+  context/{goal_id}/               # Preserved context from resolved goals
     summary.md
     sessions.jsonl
     evidence.json
@@ -228,23 +236,24 @@ IDs are ULIDs (time-sortable, globally unique).
 | Command | Description |
 |---------|-------------|
 | `agx init` | Initialize agx in a git repository |
-| `agx spawn` | Create parallel explorations with worktrees |
-| `agx status` | Show task and exploration status |
-| `agx approach` | Set strategic approach for current exploration |
-| `agx evidence` | Record structured test/build evidence |
+| `agx exploration create` | Create parallel tasks with worktrees |
+| `agx exploration status` | Show goal and task status |
+| `agx exploration approach` | Set strategic approach for current task |
+| `agx exploration evidence` | Record structured test/build evidence |
+| `agx exploration done` | Mark current task as complete |
+| `agx exploration compare` | Compare tasks side by side |
+| `agx exploration log` | View event history for a task |
+| `agx exploration pick` | Merge a task back to the base branch |
+| `agx exploration archive` | Preserve context and remove worktree |
+| `agx exploration discard` | Remove worktree without preserving context |
+| `agx exploration clean` | Remove all artifacts from resolved goals |
 | `agx record` | Record events to the session log |
-| `agx done` | Mark current exploration as complete |
-| `agx compare` | Compare explorations side by side |
-| `agx log` | View event history for an exploration |
-| `agx keep` | Merge an exploration back to the base branch |
-| `agx archive` | Preserve context and remove worktree |
-| `agx discard` | Remove worktree without preserving context |
-| `agx clean` | Remove all artifacts from resolved tasks |
-| `agx context` | List and search archived exploration context |
+| `agx context` | List and search archived task context |
 | `agx ingest` | Ingest agent events from JSONL files |
-| `agx batch create` | Create a batch of independent tasks with worktrees |
-| `agx batch status` | Show batch and per-task status (`--json` for machine output) |
-| `agx batch merge` | Merge all completed tasks sequentially (`--dry-run`, `--json`) |
+| `agx dispatch create` | Create a dispatch of independent goals with worktrees |
+| `agx dispatch status` | Show dispatch and per-goal status |
+| `agx dispatch merge` | Merge all completed goals sequentially (`--dry-run`, `--continue`) |
+| `agx dispatch cancel` | Cancel an active dispatch and abort in-progress merges |
 
 ## Building & Testing
 

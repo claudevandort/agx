@@ -6,20 +6,20 @@ const CliContext = @import("cli_common.zig").CliContext;
 
 pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !void {
     // Parse arguments
-    var task_desc: ?[]const u8 = null;
+    var goal_desc: ?[]const u8 = null;
     var count: u32 = 2;
     var base_ref: ?[]const u8 = null;
 
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
-        if (std.mem.eql(u8, args[i], "--task") or std.mem.eql(u8, args[i], "-t")) {
+        if (std.mem.eql(u8, args[i], "--goal") or std.mem.eql(u8, args[i], "-g")) {
             i += 1;
             if (i >= args.len) {
-                try stderr.print("error: --task requires a value\n", .{});
+                try stderr.print("error: --goal requires a value\n", .{});
                 try stderr.flush();
                 std.process.exit(1);
             }
-            task_desc = args[i];
+            goal_desc = args[i];
         } else if (std.mem.eql(u8, args[i], "--count") or std.mem.eql(u8, args[i], "-n")) {
             i += 1;
             if (i >= args.len) {
@@ -43,9 +43,9 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         }
     }
 
-    if (task_desc == null) {
-        try stderr.print("error: --task is required\n", .{});
-        try stderr.print("usage: agx spawn --task \"description\" [--count N] [--base ref]\n", .{});
+    if (goal_desc == null) {
+        try stderr.print("error: --goal is required\n", .{});
+        try stderr.print("usage: agx exploration create --goal \"description\" [--count N] [--base ref]\n", .{});
         try stderr.flush();
         std.process.exit(1);
     }
@@ -65,35 +65,35 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
 
     const base_branch = ctx.git.currentBranch() catch try aa.dupe(u8, "HEAD");
 
-    // Create task
+    // Create goal
     const now = std.time.milliTimestamp();
-    const task_id = Ulid.new();
-    const task_short = task_id.short(6);
+    const goal_id = Ulid.new();
+    const goal_short = goal_id.short(6);
 
-    try ctx.store.insertTask(.{
-        .id = task_id,
-        .description = task_desc.?,
+    try ctx.store.insertGoal(.{
+        .id = goal_id,
+        .description = goal_desc.?,
         .base_commit = base_commit,
         .base_branch = base_branch,
         .status = .active,
-        .resolved_exploration_id = null,
-        .batch_id = null,
+        .resolved_task_id = null,
+        .dispatch_id = null,
         .created_at = now,
         .updated_at = now,
     });
 
-    try stdout.print("Task {s}: {s}\n", .{ &task_short, task_desc.? });
+    try stdout.print("Goal {s}: {s}\n", .{ &goal_short, goal_desc.? });
     try stdout.print("Base: {s} ({s})\n", .{ base_branch, base_commit[0..@min(8, base_commit.len)] });
     try stdout.print("\n", .{});
 
-    // Create explorations with worktrees
-    const worktree_base = try std.fmt.allocPrint(aa, "{s}/agx/worktrees/{s}", .{ ctx.git_dir, &task_short });
+    // Create tasks with worktrees
+    const worktree_base = try std.fmt.allocPrint(aa, "{s}/agx/worktrees/{s}", .{ ctx.git_dir, &goal_short });
     std.fs.cwd().makePath(worktree_base) catch {};
 
     var idx: u32 = 1;
     while (idx <= count) : (idx += 1) {
-        const exp_id = Ulid.new();
-        const branch_name = try std.fmt.allocPrint(aa, "agx/{s}/{d}", .{ &task_short, idx });
+        const task_id = Ulid.new();
+        const branch_name = try std.fmt.allocPrint(aa, "agx/{s}/{d}", .{ &goal_short, idx });
         const worktree_path = try std.fmt.allocPrint(aa, "{s}/{d}", .{ worktree_base, idx });
 
         // Create worktree (also creates branch)
@@ -103,9 +103,9 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
             std.process.exit(1);
         };
 
-        try ctx.store.insertExploration(.{
-            .id = exp_id,
-            .task_id = task_id,
+        try ctx.store.insertTask(.{
+            .id = task_id,
+            .goal_id = goal_id,
             .index = idx,
             .worktree_path = worktree_path,
             .branch_name = branch_name,
@@ -116,15 +116,15 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
             .updated_at = now,
         });
 
-        // Create a session for this exploration
+        // Create a session for this task
         const session_id = Ulid.new();
         try ctx.store.insertSession(.{
             .id = session_id,
-            .exploration_id = exp_id,
+            .exploration_id = task_id,
             .agent_type = null,
             .model_version = null,
             .environment_fingerprint = null,
-            .initial_prompt = task_desc,
+            .initial_prompt = goal_desc,
             .exit_reason = null,
             .started_at = now,
             .ended_at = null,
@@ -134,18 +134,18 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         const session_file_path = try std.fmt.allocPrint(aa, "{s}/.agx-session", .{worktree_path});
 
         const session_id_str = session_id.encode();
-        const exp_id_str = exp_id.encode();
         const task_id_str = task_id.encode();
+        const goal_id_str = goal_id.encode();
 
         const session_file = try std.fs.cwd().createFile(session_file_path, .{});
         defer session_file.close();
 
         var file_buf: [512]u8 = undefined;
         var file_writer = session_file.writer(&file_buf);
-        try file_writer.interface.print("session_id={s}\nexploration_id={s}\ntask_id={s}\nindex={d}\n", .{
+        try file_writer.interface.print("session_id={s}\ntask_id={s}\ngoal_id={s}\nindex={d}\n", .{
             &session_id_str,
-            &exp_id_str,
             &task_id_str,
+            &goal_id_str,
             idx,
         });
         try file_writer.interface.flush();
@@ -153,6 +153,6 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         try stdout.print("  [{d}] {s}\n", .{ idx, worktree_path });
     }
 
-    try stdout.print("\n{d} explorations spawned. Start agents in each worktree.\n", .{count});
+    try stdout.print("\n{d} tasks spawned. Start agents in each worktree.\n", .{count});
     try stdout.flush();
 }

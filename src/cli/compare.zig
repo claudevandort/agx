@@ -7,7 +7,7 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     var format_str: ?[]const u8 = null;
     var diff_a: ?[]const u8 = null;
     var diff_b: ?[]const u8 = null;
-    var task_filter: ?[]const u8 = null;
+    var goal_filter: ?[]const u8 = null;
 
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
@@ -19,9 +19,9 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
             if (i < args.len) diff_a = args[i];
             i += 1;
             if (i < args.len) diff_b = args[i];
-        } else if (std.mem.eql(u8, args[i], "--task") or std.mem.eql(u8, args[i], "-t")) {
+        } else if (std.mem.eql(u8, args[i], "--goal") or std.mem.eql(u8, args[i], "-g")) {
             i += 1;
-            if (i < args.len) task_filter = args[i];
+            if (i < args.len) goal_filter = args[i];
         }
     }
 
@@ -32,19 +32,19 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     var ctx = CliContext.open(aa, stderr);
     defer ctx.deinit();
 
-    // Find the task
-    const task = blk: {
-        if (task_filter) |filter| {
-            break :blk findTaskByFilter(&ctx.store, filter) catch {
-                try stderr.print("error: no task matching '{s}'\n", .{filter});
+    // Find the goal
+    const g = blk: {
+        if (goal_filter) |filter| {
+            break :blk findGoalByFilter(&ctx.store, filter) catch {
+                try stderr.print("error: no goal matching '{s}'\n", .{filter});
                 try stderr.flush();
                 std.process.exit(1);
                 unreachable;
             };
         } else {
-            break :blk ctx.store.getActiveTask() catch {
-                try stderr.print("error: no active task found\n", .{});
-                try stderr.print("hint: use --task <id> to specify a task\n", .{});
+            break :blk ctx.store.getActiveGoal() catch {
+                try stderr.print("error: no active goal found\n", .{});
+                try stderr.print("hint: use --goal <id> to specify a goal\n", .{});
                 try stderr.flush();
                 std.process.exit(1);
                 unreachable;
@@ -52,28 +52,28 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         }
     };
 
-    // Get explorations
-    var exp_buf: [32]agx.Exploration = undefined;
-    const explorations = try ctx.store.getExplorationsByTask(task.id, &exp_buf);
+    // Get tasks
+    var task_buf: [32]agx.Task = undefined;
+    const tasks = try ctx.store.getTasksByGoal(g.id, &task_buf);
 
-    if (explorations.len == 0) {
-        try stderr.print("error: no explorations found for this task\n", .{});
+    if (tasks.len == 0) {
+        try stderr.print("error: no tasks found for this goal\n", .{});
         try stderr.flush();
         std.process.exit(1);
     }
 
-    // Handle --diff mode (three-way diff between two explorations)
+    // Handle --diff mode (three-way diff between two tasks)
     if (diff_a != null and diff_b != null) {
-        try runDiff(alloc, &ctx.store, &task, explorations, diff_a.?, diff_b.?, stdout, stderr);
+        try runDiff(alloc, &ctx.store, &g, tasks, diff_a.?, diff_b.?, stdout, stderr);
         return;
     } else if (diff_a != null or diff_b != null) {
-        try stderr.print("error: --diff requires two exploration indices (e.g., --diff 1 2)\n", .{});
+        try stderr.print("error: --diff requires two task indices (e.g., --diff 1 2)\n", .{});
         try stderr.flush();
         std.process.exit(1);
     }
 
     // Collect metrics
-    const metrics = agx.compare_metrics.collectMetrics(aa, &ctx.store, &task, explorations) catch |err| {
+    const metrics = agx.compare_metrics.collectMetrics(aa, &ctx.store, &g, tasks) catch |err| {
         try stderr.print("error: failed to collect metrics: {s}\n", .{@errorName(err)});
         try stderr.flush();
         std.process.exit(1);
@@ -91,79 +91,79 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     else
         .table;
 
-    try agx.compare_renderer.render(aa, stdout, metrics, format, task.description);
+    try agx.compare_renderer.render(aa, stdout, metrics, format, g.description);
     try stdout.flush();
 }
 
 fn runDiff(
     alloc: Allocator,
     store: *agx.Store,
-    task: *const agx.Task,
-    explorations: []const agx.Exploration,
+    g: *const agx.Goal,
+    tasks: []const agx.Task,
     a_str: []const u8,
     b_str: []const u8,
     stdout: *std.Io.Writer,
     stderr: *std.Io.Writer,
 ) !void {
     const idx_a = std.fmt.parseInt(u32, a_str, 10) catch {
-        try stderr.print("error: invalid exploration index '{s}'\n", .{a_str});
+        try stderr.print("error: invalid task index '{s}'\n", .{a_str});
         try stderr.flush();
         std.process.exit(1);
     };
     const idx_b = std.fmt.parseInt(u32, b_str, 10) catch {
-        try stderr.print("error: invalid exploration index '{s}'\n", .{b_str});
+        try stderr.print("error: invalid task index '{s}'\n", .{b_str});
         try stderr.flush();
         std.process.exit(1);
     };
 
     _ = store;
 
-    // Find the explorations by index
-    var exp_a: ?agx.Exploration = null;
-    var exp_b: ?agx.Exploration = null;
-    for (explorations) |exp| {
-        if (exp.index == idx_a) exp_a = exp;
-        if (exp.index == idx_b) exp_b = exp;
+    // Find the tasks by index
+    var task_a: ?agx.Task = null;
+    var task_b: ?agx.Task = null;
+    for (tasks) |t| {
+        if (t.index == idx_a) task_a = t;
+        if (t.index == idx_b) task_b = t;
     }
 
-    if (exp_a == null) {
-        try stderr.print("error: exploration [{d}] not found\n", .{idx_a});
+    if (task_a == null) {
+        try stderr.print("error: task [{d}] not found\n", .{idx_a});
         try stderr.flush();
         std.process.exit(1);
     }
-    if (exp_b == null) {
-        try stderr.print("error: exploration [{d}] not found\n", .{idx_b});
+    if (task_b == null) {
+        try stderr.print("error: task [{d}] not found\n", .{idx_b});
         try stderr.flush();
         std.process.exit(1);
     }
 
     try stdout.print("Three-way diff: base ({s}) vs [{d}] vs [{d}]\n\n", .{
-        task.base_commit[0..@min(8, task.base_commit.len)],
+        g.base_commit[0..@min(8, g.base_commit.len)],
         idx_a,
         idx_b,
     });
 
-    // Use git diff between the two exploration branches
+    // Use git diff between the two task branches
     const git = agx.GitCli.init(alloc, null);
-    const diff_output = git.diffThreeWay(task.base_commit, exp_a.?.branch_name, exp_b.?.branch_name) catch {
-        try stderr.print("error: could not compute diff between explorations\n", .{});
+    const diff_output = git.diffThreeWay(g.base_commit, task_a.?.branch_name, task_b.?.branch_name) catch {
+        try stderr.print("error: could not compute diff between tasks\n", .{});
         try stderr.flush();
         std.process.exit(1);
         unreachable;
     };
 
     if (diff_output.len == 0) {
-        try stdout.print("No differences between exploration [{d}] and [{d}]\n", .{ idx_a, idx_b });
+        try stdout.print("No differences between task [{d}] and [{d}]\n", .{ idx_a, idx_b });
     } else {
         try stdout.print("{s}", .{diff_output});
     }
     try stdout.flush();
 }
 
-fn findTaskByFilter(store: *agx.Store, filter: []const u8) !agx.Task {
-    // Search tasks by ULID prefix
+fn findGoalByFilter(store: *agx.Store, filter: []const u8) !agx.Goal {
+    // Search goals by ULID prefix
     var stmt = try store.db.prepare(
-        "SELECT id FROM tasks ORDER BY created_at DESC",
+        "SELECT id FROM goals ORDER BY created_at DESC",
     );
     defer stmt.finalize();
 
@@ -178,7 +178,7 @@ fn findTaskByFilter(store: *agx.Store, filter: []const u8) !agx.Task {
         const encoded = ulid.encode();
 
         if (filter.len <= encoded.len and std.ascii.eqlIgnoreCase(filter, encoded[0..filter.len])) {
-            return store.getTask(ulid);
+            return store.getGoal(ulid);
         }
     }
 

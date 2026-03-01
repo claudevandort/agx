@@ -2,7 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 pub const FileSet = struct {
-    task_index: usize,
+    goal_index: usize,
     files: []const []const u8,
 };
 
@@ -101,7 +101,7 @@ pub fn computeMergeOrder(alloc: Allocator, file_sets: []const FileSet) ![]usize 
 
     // Map back to task_index values
     for (order) |*o| {
-        o.* = file_sets[o.*].task_index;
+        o.* = file_sets[o.*].goal_index;
     }
 
     return order;
@@ -140,9 +140,9 @@ test "computeMergeOrder disjoint sets preserve order" {
     const aa = arena.allocator();
 
     const file_sets = &[_]FileSet{
-        .{ .task_index = 0, .files = &.{ "a.zig", "b.zig" } },
-        .{ .task_index = 1, .files = &.{ "c.zig", "d.zig" } },
-        .{ .task_index = 2, .files = &.{ "e.zig", "f.zig" } },
+        .{ .goal_index = 0, .files = &.{ "a.zig", "b.zig" } },
+        .{ .goal_index = 1, .files = &.{ "c.zig", "d.zig" } },
+        .{ .goal_index = 2, .files = &.{ "e.zig", "f.zig" } },
     };
 
     const order = try computeMergeOrder(aa, file_sets);
@@ -163,9 +163,9 @@ test "computeMergeOrder overlapping sets sorted by least overlap" {
     // Task 1: shares "shared.zig" with task 0, "common.zig" with task 2 (overlap=2)
     // Task 2: shares "shared.zig" with task 0, "common.zig" with task 1 (overlap=2)
     const file_sets = &[_]FileSet{
-        .{ .task_index = 0, .files = &.{ "a.zig", "shared.zig" } },
-        .{ .task_index = 1, .files = &.{ "b.zig", "shared.zig", "common.zig" } },
-        .{ .task_index = 2, .files = &.{ "c.zig", "shared.zig", "common.zig" } },
+        .{ .goal_index = 0, .files = &.{ "a.zig", "shared.zig" } },
+        .{ .goal_index = 1, .files = &.{ "b.zig", "shared.zig", "common.zig" } },
+        .{ .goal_index = 2, .files = &.{ "c.zig", "shared.zig", "common.zig" } },
     };
 
     const order = try computeMergeOrder(aa, file_sets);

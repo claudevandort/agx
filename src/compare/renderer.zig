@@ -1,6 +1,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const ExplorationMetrics = @import("metrics.zig").ExplorationMetrics;
+const TaskMetrics = @import("metrics.zig").TaskMetrics;
 const JsonWriter = @import("../util/json_writer.zig").JsonWriter;
 
 pub const Format = enum {
@@ -17,23 +17,23 @@ pub const Format = enum {
 pub fn render(
     alloc: Allocator,
     writer: *std.Io.Writer,
-    metrics: []const ExplorationMetrics,
+    metrics: []const TaskMetrics,
     format: Format,
-    task_description: []const u8,
+    goal_description: []const u8,
 ) !void {
     switch (format) {
-        .table => try renderTable(alloc, writer, metrics, task_description),
-        .json => try renderJson(writer, metrics, task_description),
+        .table => try renderTable(alloc, writer, metrics, goal_description),
+        .json => try renderJson(writer, metrics, goal_description),
     }
 }
 
 fn renderTable(
     alloc: Allocator,
     w: *std.Io.Writer,
-    metrics: []const ExplorationMetrics,
-    task_description: []const u8,
+    metrics: []const TaskMetrics,
+    goal_description: []const u8,
 ) !void {
-    try w.print("Comparing explorations for: {s}\n", .{task_description});
+    try w.print("Comparing tasks for: {s}\n", .{goal_description});
     try w.print("\n", .{});
 
     // Header
@@ -112,7 +112,7 @@ fn renderTable(
     }
 }
 
-fn renderFileOverlap(alloc: Allocator, w: *std.Io.Writer, metrics: []const ExplorationMetrics) !void {
+fn renderFileOverlap(alloc: Allocator, w: *std.Io.Writer, metrics: []const TaskMetrics) !void {
     // Collect all unique files
     var all_files = std.StringHashMap(void).init(alloc);
     defer all_files.deinit();
@@ -152,13 +152,13 @@ fn renderFileOverlap(alloc: Allocator, w: *std.Io.Writer, metrics: []const Explo
 
 fn renderJson(
     w: *std.Io.Writer,
-    metrics: []const ExplorationMetrics,
-    task_description: []const u8,
+    metrics: []const TaskMetrics,
+    goal_description: []const u8,
 ) !void {
     var jw = JsonWriter.init(w);
     try jw.beginObject();
-    try jw.stringField("task", task_description);
-    try jw.arrayField("explorations");
+    try jw.stringField("goal", goal_description);
+    try jw.arrayField("tasks");
 
     for (metrics) |m| {
         try jw.beginObjectValue();

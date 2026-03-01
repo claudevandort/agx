@@ -3,13 +3,13 @@ const Allocator = std.mem.Allocator;
 const sqlite = @import("sqlite");
 const migrations = @import("migrations.zig").migrations;
 const Ulid = @import("../core/ulid.zig").Ulid;
+const Goal = @import("../core/goal.zig").Goal;
+const GoalStatus = @import("../core/goal.zig").GoalStatus;
+const Dispatch = @import("../core/dispatch.zig").Dispatch;
+const DispatchStatus = @import("../core/dispatch.zig").DispatchStatus;
+const MergePolicy = @import("../core/dispatch.zig").MergePolicy;
 const Task = @import("../core/task.zig").Task;
 const TaskStatus = @import("../core/task.zig").TaskStatus;
-const Batch = @import("../core/batch.zig").Batch;
-const BatchStatus = @import("../core/batch.zig").BatchStatus;
-const MergePolicy = @import("../core/batch.zig").MergePolicy;
-const Exploration = @import("../core/exploration.zig").Exploration;
-const ExplorationStatus = @import("../core/exploration.zig").ExplorationStatus;
 const Session = @import("../core/session.zig").Session;
 const ExitReason = @import("../core/session.zig").ExitReason;
 const Event = @import("../core/event.zig").Event;
@@ -30,10 +30,10 @@ pub const Store = struct {
 
     // Cached prepared statements for hot-path queries
     cached_insert_event: ?sqlite.Stmt = null,
-    cached_exps_by_task: ?sqlite.Stmt = null,
-    cached_sessions_by_exp: ?sqlite.Stmt = null,
+    cached_tasks_by_goal: ?sqlite.Stmt = null,
+    cached_sessions_by_task: ?sqlite.Stmt = null,
     cached_events_by_session: ?sqlite.Stmt = null,
-    cached_evidence_by_exp: ?sqlite.Stmt = null,
+    cached_evidence_by_task: ?sqlite.Stmt = null,
 
     pub fn init(alloc: Allocator, path: [*:0]const u8) StoreError!Store {
         var db = try sqlite.Db.open(path);
@@ -50,10 +50,10 @@ pub const Store = struct {
 
     pub fn deinit(self: *Store) void {
         if (self.cached_insert_event) |*s| s.finalize();
-        if (self.cached_exps_by_task) |*s| s.finalize();
-        if (self.cached_sessions_by_exp) |*s| s.finalize();
+        if (self.cached_tasks_by_goal) |*s| s.finalize();
+        if (self.cached_sessions_by_task) |*s| s.finalize();
         if (self.cached_events_by_session) |*s| s.finalize();
-        if (self.cached_evidence_by_exp) |*s| s.finalize();
+        if (self.cached_evidence_by_task) |*s| s.finalize();
         self.db.close();
     }
 
@@ -112,72 +112,72 @@ pub const Store = struct {
         return Ulid{ .bytes = blob[0..16].* };
     }
 
-    // ── Task CRUD ──
+    // ── Goal CRUD ──
 
-    pub fn insertTask(self: *Store, task: Task) StoreError!void {
+    pub fn insertGoal(self: *Store, goal: Goal) StoreError!void {
         var stmt = try self.db.prepare(
-            "INSERT INTO tasks (id, description, base_commit, base_branch, status, resolved_exploration_id, batch_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO goals (id, description, base_commit, base_branch, status, resolved_task_id, dispatch_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         );
         defer stmt.finalize();
-        try stmt.bindBlob(1, &task.id.bytes);
-        try stmt.bindText(2, task.description);
-        try stmt.bindText(3, task.base_commit);
-        try stmt.bindText(4, task.base_branch);
-        try stmt.bindText(5, task.status.toStr());
-        try stmt.bindOptionalBlob(6, if (task.resolved_exploration_id) |r| &r.bytes else null);
-        try stmt.bindOptionalBlob(7, if (task.batch_id) |b| &b.bytes else null);
-        try stmt.bindInt64(8, task.created_at);
-        try stmt.bindInt64(9, task.updated_at);
+        try stmt.bindBlob(1, &goal.id.bytes);
+        try stmt.bindText(2, goal.description);
+        try stmt.bindText(3, goal.base_commit);
+        try stmt.bindText(4, goal.base_branch);
+        try stmt.bindText(5, goal.status.toStr());
+        try stmt.bindOptionalBlob(6, if (goal.resolved_task_id) |r| &r.bytes else null);
+        try stmt.bindOptionalBlob(7, if (goal.dispatch_id) |b| &b.bytes else null);
+        try stmt.bindInt64(8, goal.created_at);
+        try stmt.bindInt64(9, goal.updated_at);
         _ = try stmt.step();
-        self.indexEntity("task", task.id, task.id, task.description);
+        self.indexEntity("goal", goal.id, goal.id, goal.description);
     }
 
-    pub fn getTask(self: *Store, id: Ulid) StoreError!Task {
+    pub fn getGoal(self: *Store, id: Ulid) StoreError!Goal {
         var stmt = try self.db.prepare(
-            "SELECT id, description, base_commit, base_branch, status, resolved_exploration_id, batch_id, created_at, updated_at FROM tasks WHERE id = ?1",
+            "SELECT id, description, base_commit, base_branch, status, resolved_task_id, dispatch_id, created_at, updated_at FROM goals WHERE id = ?1",
         );
         defer stmt.finalize();
         try stmt.bindBlob(1, &id.bytes);
         const result = try stmt.step();
         if (result != .row) return error.NotFound;
-        return self.readTask(&stmt);
+        return self.readGoal(&stmt);
     }
 
-    pub fn getActiveTask(self: *Store) StoreError!Task {
+    pub fn getActiveGoal(self: *Store) StoreError!Goal {
         var stmt = try self.db.prepare(
-            "SELECT id, description, base_commit, base_branch, status, resolved_exploration_id, batch_id, created_at, updated_at FROM tasks WHERE status = 'active' ORDER BY created_at DESC LIMIT 1",
+            "SELECT id, description, base_commit, base_branch, status, resolved_task_id, dispatch_id, created_at, updated_at FROM goals WHERE status = 'active' ORDER BY created_at DESC LIMIT 1",
         );
         defer stmt.finalize();
         const result = try stmt.step();
         if (result != .row) return error.NotFound;
-        return self.readTask(&stmt);
+        return self.readGoal(&stmt);
     }
 
-    pub fn updateTaskStatus(self: *Store, id: Ulid, status: TaskStatus, resolved_exploration_id: ?Ulid) StoreError!void {
+    pub fn updateGoalStatus(self: *Store, id: Ulid, status: GoalStatus, resolved_task_id: ?Ulid) StoreError!void {
         var stmt = try self.db.prepare(
-            "UPDATE tasks SET status = ?1, resolved_exploration_id = ?2, updated_at = ?3 WHERE id = ?4",
+            "UPDATE goals SET status = ?1, resolved_task_id = ?2, updated_at = ?3 WHERE id = ?4",
         );
         defer stmt.finalize();
         try stmt.bindText(1, status.toStr());
-        try stmt.bindOptionalBlob(2, if (resolved_exploration_id) |r| &r.bytes else null);
+        try stmt.bindOptionalBlob(2, if (resolved_task_id) |r| &r.bytes else null);
         try stmt.bindInt64(3, std.time.milliTimestamp());
         try stmt.bindBlob(4, &id.bytes);
         _ = try stmt.step();
     }
 
-    fn readTask(self: *Store, stmt: *sqlite.Stmt) StoreError!Task {
+    fn readGoal(self: *Store, stmt: *sqlite.Stmt) StoreError!Goal {
         const resolved_blob = stmt.columnBlob(5);
-        const batch_blob = stmt.columnBlob(6);
+        const dispatch_blob = stmt.columnBlob(6);
         return .{
             .id = readUlid(stmt, 0),
             .description = try self.dupeText(stmt.columnText(1)),
             .base_commit = try self.dupeText(stmt.columnText(2)),
             .base_branch = try self.dupeText(stmt.columnText(3)),
-            .status = TaskStatus.fromStr(stmt.columnText(4) orelse "active") catch .active,
-            .resolved_exploration_id = if (resolved_blob) |b| blk: {
+            .status = GoalStatus.fromStr(stmt.columnText(4) orelse "active") catch .active,
+            .resolved_task_id = if (resolved_blob) |b| blk: {
                 break :blk if (b.len >= 16) Ulid{ .bytes = b[0..16].* } else null;
             } else null,
-            .batch_id = if (batch_blob) |b| blk: {
+            .dispatch_id = if (dispatch_blob) |b| blk: {
                 break :blk if (b.len >= 16) Ulid{ .bytes = b[0..16].* } else null;
             } else null,
             .created_at = stmt.columnInt64(7),
@@ -185,64 +185,64 @@ pub const Store = struct {
         };
     }
 
-    // ── Exploration CRUD ──
+    // ── Task CRUD ──
 
-    pub fn insertExploration(self: *Store, exp: Exploration) StoreError!void {
+    pub fn insertTask(self: *Store, task: Task) StoreError!void {
         var stmt = try self.db.prepare(
-            "INSERT INTO explorations (id, task_id, idx, worktree_path, branch_name, status, approach, summary, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO tasks (id, goal_id, idx, worktree_path, branch_name, status, approach, summary, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         );
         defer stmt.finalize();
-        try stmt.bindBlob(1, &exp.id.bytes);
-        try stmt.bindBlob(2, &exp.task_id.bytes);
-        try stmt.bindInt(3, @intCast(exp.index));
-        try stmt.bindText(4, exp.worktree_path);
-        try stmt.bindText(5, exp.branch_name);
-        try stmt.bindText(6, exp.status.toStr());
-        try stmt.bindOptionalText(7, exp.approach);
-        try stmt.bindOptionalText(8, exp.summary);
-        try stmt.bindInt64(9, exp.created_at);
-        try stmt.bindInt64(10, exp.updated_at);
+        try stmt.bindBlob(1, &task.id.bytes);
+        try stmt.bindBlob(2, &task.goal_id.bytes);
+        try stmt.bindInt(3, @intCast(task.index));
+        try stmt.bindText(4, task.worktree_path);
+        try stmt.bindText(5, task.branch_name);
+        try stmt.bindText(6, task.status.toStr());
+        try stmt.bindOptionalText(7, task.approach);
+        try stmt.bindOptionalText(8, task.summary);
+        try stmt.bindInt64(9, task.created_at);
+        try stmt.bindInt64(10, task.updated_at);
         _ = try stmt.step();
     }
 
-    pub fn getExplorationsByTask(self: *Store, task_id: Ulid, buf: []Exploration) StoreError![]Exploration {
+    pub fn getTasksByGoal(self: *Store, goal_id: Ulid, buf: []Task) StoreError![]Task {
         const stmt = try self.getCached(
-            &self.cached_exps_by_task,
-            "SELECT id, task_id, idx, worktree_path, branch_name, status, approach, summary, created_at, updated_at FROM explorations WHERE task_id = ?1 ORDER BY idx",
+            &self.cached_tasks_by_goal,
+            "SELECT id, goal_id, idx, worktree_path, branch_name, status, approach, summary, created_at, updated_at FROM tasks WHERE goal_id = ?1 ORDER BY idx",
         );
-        try stmt.bindBlob(1, &task_id.bytes);
+        try stmt.bindBlob(1, &goal_id.bytes);
 
         var count: usize = 0;
         while (count < buf.len) {
             const result = try stmt.step();
             if (result != .row) break;
-            buf[count] = try self.readExploration(stmt);
+            buf[count] = try self.readTask(stmt);
             count += 1;
         }
         if (count == buf.len) {
             const extra = try stmt.step();
             if (extra == .row) {
-                std.log.warn("getExplorationsByTask: buffer full ({d}), results truncated", .{buf.len});
+                std.log.warn("getTasksByGoal: buffer full ({d}), results truncated", .{buf.len});
             }
         }
         return buf[0..count];
     }
 
-    pub fn getExplorationByIndex(self: *Store, task_id: Ulid, index: u32) StoreError!Exploration {
+    pub fn getTaskByIndex(self: *Store, goal_id: Ulid, index: u32) StoreError!Task {
         var stmt = try self.db.prepare(
-            "SELECT id, task_id, idx, worktree_path, branch_name, status, approach, summary, created_at, updated_at FROM explorations WHERE task_id = ?1 AND idx = ?2",
+            "SELECT id, goal_id, idx, worktree_path, branch_name, status, approach, summary, created_at, updated_at FROM tasks WHERE goal_id = ?1 AND idx = ?2",
         );
         defer stmt.finalize();
-        try stmt.bindBlob(1, &task_id.bytes);
+        try stmt.bindBlob(1, &goal_id.bytes);
         try stmt.bindInt(2, @intCast(index));
         const result = try stmt.step();
         if (result != .row) return error.NotFound;
-        return self.readExploration(&stmt);
+        return self.readTask(&stmt);
     }
 
-    pub fn updateExplorationStatus(self: *Store, id: Ulid, status: ExplorationStatus, summary: ?[]const u8) StoreError!void {
+    pub fn updateTaskStatus(self: *Store, id: Ulid, status: TaskStatus, summary: ?[]const u8) StoreError!void {
         var stmt = try self.db.prepare(
-            "UPDATE explorations SET status = ?1, summary = COALESCE(?2, summary), updated_at = ?3 WHERE id = ?4",
+            "UPDATE tasks SET status = ?1, summary = COALESCE(?2, summary), updated_at = ?3 WHERE id = ?4",
         );
         defer stmt.finalize();
         try stmt.bindText(1, status.toStr());
@@ -250,45 +250,45 @@ pub const Store = struct {
         try stmt.bindInt64(3, std.time.milliTimestamp());
         try stmt.bindBlob(4, &id.bytes);
         _ = try stmt.step();
-        // Index summary into FTS — need task_id from DB
+        // Index summary into FTS — need goal_id from DB
         if (summary) |s| {
-            var lookup = self.db.prepare("SELECT task_id FROM explorations WHERE id = ?1") catch return;
+            var lookup = self.db.prepare("SELECT goal_id FROM tasks WHERE id = ?1") catch return;
             defer lookup.finalize();
             lookup.bindBlob(1, &id.bytes) catch return;
             if ((lookup.step() catch return) == .row) {
-                const task_id = readUlid(&lookup, 0);
-                self.indexEntity("exploration", id, task_id, s);
+                const goal_id = readUlid(&lookup, 0);
+                self.indexEntity("task", id, goal_id, s);
             }
         }
     }
 
-    pub fn updateExplorationApproach(self: *Store, id: Ulid, approach: []const u8) StoreError!void {
+    pub fn updateTaskApproach(self: *Store, id: Ulid, approach: []const u8) StoreError!void {
         var stmt = try self.db.prepare(
-            "UPDATE explorations SET approach = ?1, updated_at = ?2 WHERE id = ?3",
+            "UPDATE tasks SET approach = ?1, updated_at = ?2 WHERE id = ?3",
         );
         defer stmt.finalize();
         try stmt.bindText(1, approach);
         try stmt.bindInt64(2, std.time.milliTimestamp());
         try stmt.bindBlob(3, &id.bytes);
         _ = try stmt.step();
-        // Index approach into FTS — need task_id from DB
-        var lookup = self.db.prepare("SELECT task_id FROM explorations WHERE id = ?1") catch return;
+        // Index approach into FTS — need goal_id from DB
+        var lookup = self.db.prepare("SELECT goal_id FROM tasks WHERE id = ?1") catch return;
         defer lookup.finalize();
         lookup.bindBlob(1, &id.bytes) catch return;
         if ((lookup.step() catch return) == .row) {
-            const task_id = readUlid(&lookup, 0);
-            self.indexEntity("exploration", id, task_id, approach);
+            const goal_id = readUlid(&lookup, 0);
+            self.indexEntity("task", id, goal_id, approach);
         }
     }
 
-    fn readExploration(self: *Store, stmt: *sqlite.Stmt) StoreError!Exploration {
+    fn readTask(self: *Store, stmt: *sqlite.Stmt) StoreError!Task {
         return .{
             .id = readUlid(stmt, 0),
-            .task_id = readUlid(stmt, 1),
+            .goal_id = readUlid(stmt, 1),
             .index = @intCast(stmt.columnInt(2)),
             .worktree_path = try self.dupeText(stmt.columnText(3)),
             .branch_name = try self.dupeText(stmt.columnText(4)),
-            .status = ExplorationStatus.fromStr(stmt.columnText(5) orelse "active") catch .active,
+            .status = TaskStatus.fromStr(stmt.columnText(5) orelse "active") catch .active,
             .approach = try self.dupeOptionalText(stmt.columnText(6)),
             .summary = try self.dupeOptionalText(stmt.columnText(7)),
             .created_at = stmt.columnInt64(8),
@@ -326,12 +326,12 @@ pub const Store = struct {
         _ = try stmt.step();
     }
 
-    pub fn getSessionsByExploration(self: *Store, exploration_id: Ulid, buf: []Session) StoreError![]Session {
+    pub fn getSessionsByTask(self: *Store, task_id: Ulid, buf: []Session) StoreError![]Session {
         const stmt = try self.getCached(
-            &self.cached_sessions_by_exp,
+            &self.cached_sessions_by_task,
             "SELECT id, exploration_id, agent_type, model_version, environment_fingerprint, initial_prompt, exit_reason, started_at, ended_at FROM sessions WHERE exploration_id = ?1 ORDER BY started_at",
         );
-        try stmt.bindBlob(1, &exploration_id.bytes);
+        try stmt.bindBlob(1, &task_id.bytes);
 
         var count: usize = 0;
         while (count < buf.len) {
@@ -356,7 +356,7 @@ pub const Store = struct {
         if (count == buf.len) {
             const extra = try stmt.step();
             if (extra == .row) {
-                std.log.warn("getSessionsByExploration: buffer full ({d}), results truncated", .{buf.len});
+                std.log.warn("getSessionsByTask: buffer full ({d}), results truncated", .{buf.len});
             }
         }
         return buf[0..count];
@@ -425,12 +425,12 @@ pub const Store = struct {
         return buf[0..count];
     }
 
-    pub fn countErrorsByExploration(self: *Store, exploration_id: Ulid) StoreError!i64 {
+    pub fn countErrorsByTask(self: *Store, task_id: Ulid) StoreError!i64 {
         var stmt = try self.db.prepare(
             "SELECT COUNT(*) FROM events e JOIN sessions s ON e.session_id = s.id WHERE s.exploration_id = ?1 AND e.kind = 'error'",
         );
         defer stmt.finalize();
-        try stmt.bindBlob(1, &exploration_id.bytes);
+        try stmt.bindBlob(1, &task_id.bytes);
         _ = try stmt.step();
         return stmt.columnInt64(0);
     }
@@ -453,22 +453,22 @@ pub const Store = struct {
         _ = try stmt.step();
         // Index evidence summary into FTS
         if (ev.summary) |s| {
-            var lookup = self.db.prepare("SELECT task_id FROM explorations WHERE id = ?1") catch return;
+            var lookup = self.db.prepare("SELECT goal_id FROM tasks WHERE id = ?1") catch return;
             defer lookup.finalize();
             lookup.bindBlob(1, &ev.exploration_id.bytes) catch return;
             if ((lookup.step() catch return) == .row) {
-                const task_id = readUlid(&lookup, 0);
-                self.indexEntity("evidence", ev.id, task_id, s);
+                const goal_id = readUlid(&lookup, 0);
+                self.indexEntity("evidence", ev.id, goal_id, s);
             }
         }
     }
 
-    pub fn getEvidenceByExploration(self: *Store, exploration_id: Ulid, buf: []Evidence) StoreError![]Evidence {
+    pub fn getEvidenceByTask(self: *Store, task_id: Ulid, buf: []Evidence) StoreError![]Evidence {
         const stmt = try self.getCached(
-            &self.cached_evidence_by_exp,
+            &self.cached_evidence_by_task,
             "SELECT id, exploration_id, kind, status, hash, summary, raw_path, recorded_at FROM evidence WHERE exploration_id = ?1 ORDER BY recorded_at",
         );
-        try stmt.bindBlob(1, &exploration_id.bytes);
+        try stmt.bindBlob(1, &task_id.bytes);
 
         var count: usize = 0;
         while (count < buf.len) {
@@ -489,17 +489,17 @@ pub const Store = struct {
         if (count == buf.len) {
             const extra = try stmt.step();
             if (extra == .row) {
-                std.log.warn("getEvidenceByExploration: buffer full ({d}), results truncated", .{buf.len});
+                std.log.warn("getEvidenceByTask: buffer full ({d}), results truncated", .{buf.len});
             }
         }
         return buf[0..count];
     }
 
-    // ── Task queries ──
+    // ── Goal queries ──
 
-    pub fn getAllTasks(self: *Store, buf: []Task) StoreError![]Task {
+    pub fn getAllGoals(self: *Store, buf: []Goal) StoreError![]Goal {
         var stmt = try self.db.prepare(
-            "SELECT id, description, base_commit, base_branch, status, resolved_exploration_id, batch_id, created_at, updated_at FROM tasks ORDER BY created_at DESC",
+            "SELECT id, description, base_commit, base_branch, status, resolved_task_id, dispatch_id, created_at, updated_at FROM goals ORDER BY created_at DESC",
         );
         defer stmt.finalize();
 
@@ -507,21 +507,21 @@ pub const Store = struct {
         while (count < buf.len) {
             const result = try stmt.step();
             if (result != .row) break;
-            buf[count] = try self.readTask(&stmt);
+            buf[count] = try self.readGoal(&stmt);
             count += 1;
         }
         if (count == buf.len) {
             const extra = try stmt.step();
             if (extra == .row) {
-                std.log.warn("getAllTasks: buffer full ({d}), results truncated", .{buf.len});
+                std.log.warn("getAllGoals: buffer full ({d}), results truncated", .{buf.len});
             }
         }
         return buf[0..count];
     }
 
-    pub fn getResolvedTaskIds(self: *Store, buf: []Ulid) StoreError![]Ulid {
+    pub fn getResolvedGoalIds(self: *Store, buf: []Ulid) StoreError![]Ulid {
         var stmt = try self.db.prepare(
-            "SELECT id FROM tasks WHERE status = 'resolved'",
+            "SELECT id FROM goals WHERE status = 'resolved'",
         );
         defer stmt.finalize();
 
@@ -535,7 +535,7 @@ pub const Store = struct {
         if (count == buf.len) {
             const extra = try stmt.step();
             if (extra == .row) {
-                std.log.warn("getResolvedTaskIds: buffer full ({d}), results truncated", .{buf.len});
+                std.log.warn("getResolvedGoalIds: buffer full ({d}), results truncated", .{buf.len});
             }
         }
         return buf[0..count];
@@ -600,55 +600,55 @@ pub const Store = struct {
 
     /// Insert a single entity into the FTS index. Silently ignores failures
     /// (e.g., FTS table doesn't exist in old DBs).
-    fn indexEntity(self: *Store, entity_type: []const u8, entity_id: Ulid, task_id: Ulid, content: []const u8) void {
+    fn indexEntity(self: *Store, entity_type: []const u8, entity_id: Ulid, goal_id: Ulid, content: []const u8) void {
         if (content.len == 0) return;
         var stmt = self.db.prepare(
             "INSERT INTO context_fts (entity_type, entity_id, task_id, source, content) VALUES (?1, ?2, ?3, 'db', ?4)",
         ) catch return;
         defer stmt.finalize();
         const eid = entity_id.encode();
-        const tid = task_id.encode();
+        const gid = goal_id.encode();
         stmt.bindText(1, entity_type) catch return;
         stmt.bindText(2, &eid) catch return;
-        stmt.bindText(3, &tid) catch return;
+        stmt.bindText(3, &gid) catch return;
         stmt.bindText(4, content) catch return;
         _ = stmt.step() catch return;
     }
 
-    /// Rebuild the FTS index from all DB data (tasks, explorations, evidence).
+    /// Rebuild the FTS index from all DB data (goals, tasks, evidence).
     pub fn indexForSearch(self: *Store) StoreError!void {
         try self.db.exec("BEGIN");
         errdefer self.db.exec("ROLLBACK") catch {};
 
         try self.db.exec("DELETE FROM context_fts WHERE source = 'db'");
 
-        // Index tasks
+        // Index goals
         {
-            var stmt = try self.db.prepare("SELECT id, description FROM tasks");
+            var stmt = try self.db.prepare("SELECT id, description FROM goals");
             defer stmt.finalize();
             while (true) {
                 const result = try stmt.step();
                 if (result != .row) break;
                 const id = readUlid(&stmt, 0);
                 const desc = stmt.columnText(1) orelse continue;
-                self.indexEntity("task", id, id, desc);
+                self.indexEntity("goal", id, id, desc);
             }
         }
 
-        // Index explorations (approach + summary as separate rows)
+        // Index tasks (approach + summary as separate rows)
         {
-            var stmt = try self.db.prepare("SELECT id, task_id, approach, summary FROM explorations");
+            var stmt = try self.db.prepare("SELECT id, goal_id, approach, summary FROM tasks");
             defer stmt.finalize();
             while (true) {
                 const result = try stmt.step();
                 if (result != .row) break;
                 const id = readUlid(&stmt, 0);
-                const task_id = readUlid(&stmt, 1);
+                const goal_id = readUlid(&stmt, 1);
                 if (stmt.columnText(2)) |approach| {
-                    self.indexEntity("exploration", id, task_id, approach);
+                    self.indexEntity("task", id, goal_id, approach);
                 }
                 if (stmt.columnText(3)) |summary| {
-                    self.indexEntity("exploration", id, task_id, summary);
+                    self.indexEntity("task", id, goal_id, summary);
                 }
             }
         }
@@ -656,16 +656,16 @@ pub const Store = struct {
         // Index evidence
         {
             var stmt = try self.db.prepare(
-                "SELECT ev.id, e.task_id, ev.summary FROM evidence ev JOIN explorations e ON ev.exploration_id = e.id",
+                "SELECT ev.id, t.goal_id, ev.summary FROM evidence ev JOIN tasks t ON ev.exploration_id = t.id",
             );
             defer stmt.finalize();
             while (true) {
                 const result = try stmt.step();
                 if (result != .row) break;
                 const id = readUlid(&stmt, 0);
-                const task_id = readUlid(&stmt, 1);
+                const goal_id = readUlid(&stmt, 1);
                 if (stmt.columnText(2)) |summary| {
-                    self.indexEntity("evidence", id, task_id, summary);
+                    self.indexEntity("evidence", id, goal_id, summary);
                 }
             }
         }
@@ -690,15 +690,15 @@ pub const Store = struct {
             const content = std.fs.cwd().readFileAlloc(self.alloc, summary_path, 1024 * 1024) catch continue;
             const parsed = fm_mod.parseFrontmatter(content);
 
-            const task_id_str = parsed.fm.task_id orelse entry.name;
+            const goal_id_str = parsed.fm.task_id orelse entry.name;
 
             // Index the description
             if (parsed.fm.description) |desc| {
                 var stmt = self.db.prepare(
-                    "INSERT INTO context_fts (entity_type, entity_id, task_id, source, content) VALUES ('task', ?1, ?1, 'file', ?2)",
+                    "INSERT INTO context_fts (entity_type, entity_id, task_id, source, content) VALUES ('goal', ?1, ?1, 'file', ?2)",
                 ) catch continue;
                 defer stmt.finalize();
-                stmt.bindText(1, task_id_str) catch continue;
+                stmt.bindText(1, goal_id_str) catch continue;
                 stmt.bindText(2, desc) catch continue;
                 _ = stmt.step() catch continue;
             }
@@ -710,7 +710,7 @@ pub const Store = struct {
                     "INSERT INTO context_fts (entity_type, entity_id, task_id, source, content) VALUES ('context', ?1, ?1, 'file', ?2)",
                 ) catch continue;
                 defer stmt.finalize();
-                stmt.bindText(1, task_id_str) catch continue;
+                stmt.bindText(1, goal_id_str) catch continue;
                 stmt.bindText(2, body) catch continue;
                 _ = stmt.step() catch continue;
             }
@@ -725,50 +725,50 @@ pub const Store = struct {
         return stmt.columnInt64(0);
     }
 
-    // ── Batch CRUD ──
+    // ── Dispatch CRUD ──
 
-    pub fn insertBatch(self: *Store, batch: Batch) StoreError!void {
+    pub fn insertDispatch(self: *Store, d: Dispatch) StoreError!void {
         var stmt = try self.db.prepare(
-            "INSERT INTO batches (id, description, base_commit, base_branch, status, merge_policy, merge_order, merge_progress, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO dispatches (id, description, base_commit, base_branch, status, merge_policy, merge_order, merge_progress, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         );
         defer stmt.finalize();
-        try stmt.bindBlob(1, &batch.id.bytes);
-        try stmt.bindText(2, batch.description);
-        try stmt.bindText(3, batch.base_commit);
-        try stmt.bindText(4, batch.base_branch);
-        try stmt.bindText(5, batch.status.toStr());
-        try stmt.bindText(6, batch.merge_policy.toStr());
-        try stmt.bindOptionalText(7, batch.merge_order);
-        try stmt.bindInt64(8, @intCast(batch.merge_progress));
-        try stmt.bindInt64(9, batch.created_at);
-        try stmt.bindInt64(10, batch.updated_at);
+        try stmt.bindBlob(1, &d.id.bytes);
+        try stmt.bindText(2, d.description);
+        try stmt.bindText(3, d.base_commit);
+        try stmt.bindText(4, d.base_branch);
+        try stmt.bindText(5, d.status.toStr());
+        try stmt.bindText(6, d.merge_policy.toStr());
+        try stmt.bindOptionalText(7, d.merge_order);
+        try stmt.bindInt64(8, @intCast(d.merge_progress));
+        try stmt.bindInt64(9, d.created_at);
+        try stmt.bindInt64(10, d.updated_at);
         _ = try stmt.step();
     }
 
-    pub fn getBatch(self: *Store, id: Ulid) StoreError!Batch {
+    pub fn getDispatch(self: *Store, id: Ulid) StoreError!Dispatch {
         var stmt = try self.db.prepare(
-            "SELECT id, description, base_commit, base_branch, status, merge_policy, merge_order, merge_progress, created_at, updated_at FROM batches WHERE id = ?1",
+            "SELECT id, description, base_commit, base_branch, status, merge_policy, merge_order, merge_progress, created_at, updated_at FROM dispatches WHERE id = ?1",
         );
         defer stmt.finalize();
         try stmt.bindBlob(1, &id.bytes);
         const result = try stmt.step();
         if (result != .row) return error.NotFound;
-        return self.readBatch(&stmt);
+        return self.readDispatch(&stmt);
     }
 
-    pub fn getActiveBatch(self: *Store) StoreError!Batch {
+    pub fn getActiveDispatch(self: *Store) StoreError!Dispatch {
         var stmt = try self.db.prepare(
-            "SELECT id, description, base_commit, base_branch, status, merge_policy, merge_order, merge_progress, created_at, updated_at FROM batches WHERE status IN ('active', 'merging', 'conflict') ORDER BY created_at DESC LIMIT 1",
+            "SELECT id, description, base_commit, base_branch, status, merge_policy, merge_order, merge_progress, created_at, updated_at FROM dispatches WHERE status IN ('active', 'merging', 'conflict') ORDER BY created_at DESC LIMIT 1",
         );
         defer stmt.finalize();
         const result = try stmt.step();
         if (result != .row) return error.NotFound;
-        return self.readBatch(&stmt);
+        return self.readDispatch(&stmt);
     }
 
-    pub fn updateBatchStatus(self: *Store, id: Ulid, status: BatchStatus) StoreError!void {
+    pub fn updateDispatchStatus(self: *Store, id: Ulid, status: DispatchStatus) StoreError!void {
         var stmt = try self.db.prepare(
-            "UPDATE batches SET status = ?1, updated_at = ?2 WHERE id = ?3",
+            "UPDATE dispatches SET status = ?1, updated_at = ?2 WHERE id = ?3",
         );
         defer stmt.finalize();
         try stmt.bindText(1, status.toStr());
@@ -777,9 +777,9 @@ pub const Store = struct {
         _ = try stmt.step();
     }
 
-    pub fn updateBatchMergeProgress(self: *Store, id: Ulid, progress: u32) StoreError!void {
+    pub fn updateDispatchMergeProgress(self: *Store, id: Ulid, progress: u32) StoreError!void {
         var stmt = try self.db.prepare(
-            "UPDATE batches SET merge_progress = ?1, updated_at = ?2 WHERE id = ?3",
+            "UPDATE dispatches SET merge_progress = ?1, updated_at = ?2 WHERE id = ?3",
         );
         defer stmt.finalize();
         try stmt.bindInt64(1, @intCast(progress));
@@ -788,9 +788,9 @@ pub const Store = struct {
         _ = try stmt.step();
     }
 
-    pub fn updateBatchMergeOrder(self: *Store, id: Ulid, merge_order: []const u8) StoreError!void {
+    pub fn updateDispatchMergeOrder(self: *Store, id: Ulid, merge_order: []const u8) StoreError!void {
         var stmt = try self.db.prepare(
-            "UPDATE batches SET merge_order = ?1, updated_at = ?2 WHERE id = ?3",
+            "UPDATE dispatches SET merge_order = ?1, updated_at = ?2 WHERE id = ?3",
         );
         defer stmt.finalize();
         try stmt.bindText(1, merge_order);
@@ -799,9 +799,9 @@ pub const Store = struct {
         _ = try stmt.step();
     }
 
-    pub fn getAllBatches(self: *Store, buf: []Batch) StoreError![]Batch {
+    pub fn getAllDispatches(self: *Store, buf: []Dispatch) StoreError![]Dispatch {
         var stmt = try self.db.prepare(
-            "SELECT id, description, base_commit, base_branch, status, merge_policy, merge_order, merge_progress, created_at, updated_at FROM batches ORDER BY created_at DESC",
+            "SELECT id, description, base_commit, base_branch, status, merge_policy, merge_order, merge_progress, created_at, updated_at FROM dispatches ORDER BY created_at DESC",
         );
         defer stmt.finalize();
 
@@ -809,51 +809,51 @@ pub const Store = struct {
         while (count < buf.len) {
             const result = try stmt.step();
             if (result != .row) break;
-            buf[count] = try self.readBatch(&stmt);
+            buf[count] = try self.readDispatch(&stmt);
             count += 1;
         }
         if (count == buf.len) {
             const extra = try stmt.step();
             if (extra == .row) {
-                std.log.warn("getAllBatches: buffer full ({d}), results truncated", .{buf.len});
+                std.log.warn("getAllDispatches: buffer full ({d}), results truncated", .{buf.len});
             }
         }
         return buf[0..count];
     }
 
-    /// Delete a batch and all its child records.
-    /// Caller must pass pre-fetched exploration and session IDs to avoid
+    /// Delete a dispatch and all its child records.
+    /// Caller must pass pre-fetched task and session IDs to avoid
     /// read locks from cached statements.
     /// Delete order respects FK constraints:
-    ///   events/snapshots → sessions → evidence → explorations → tasks → batches
-    pub fn deleteBatch(self: *Store, batch_id: Ulid, exploration_ids: []const Ulid, session_ids: []const Ulid) StoreError!void {
+    ///   events/snapshots -> sessions -> evidence -> tasks -> goals -> dispatches
+    pub fn deleteDispatch(self: *Store, dispatch_id: Ulid, task_ids: []const Ulid, session_ids: []const Ulid) StoreError!void {
         // Reset cached statements to release any read locks
-        if (self.cached_exps_by_task) |*s| s.reset();
-        if (self.cached_sessions_by_exp) |*s| s.reset();
+        if (self.cached_tasks_by_goal) |*s| s.reset();
+        if (self.cached_sessions_by_task) |*s| s.reset();
         if (self.cached_events_by_session) |*s| s.reset();
-        if (self.cached_evidence_by_exp) |*s| s.reset();
+        if (self.cached_evidence_by_task) |*s| s.reset();
 
         // 1. Delete events and snapshots (reference sessions)
         for (session_ids) |sid| {
             self.deleteByBlob("DELETE FROM events WHERE session_id = ?1", &sid.bytes) catch {};
             self.deleteByBlob("DELETE FROM snapshots WHERE session_id = ?1", &sid.bytes) catch {};
         }
-        // 2. Delete sessions (reference explorations)
-        for (exploration_ids) |eid| {
-            self.deleteByBlob("DELETE FROM sessions WHERE exploration_id = ?1", &eid.bytes) catch {};
+        // 2. Delete sessions (reference tasks)
+        for (task_ids) |tid| {
+            self.deleteByBlob("DELETE FROM sessions WHERE exploration_id = ?1", &tid.bytes) catch {};
         }
-        // 3. Delete evidence (reference explorations)
-        for (exploration_ids) |eid| {
-            self.deleteByBlob("DELETE FROM evidence WHERE exploration_id = ?1", &eid.bytes) catch {};
+        // 3. Delete evidence (reference tasks)
+        for (task_ids) |tid| {
+            self.deleteByBlob("DELETE FROM evidence WHERE exploration_id = ?1", &tid.bytes) catch {};
         }
-        // 4. Delete explorations (reference tasks)
-        for (exploration_ids) |eid| {
-            self.deleteByBlob("DELETE FROM explorations WHERE id = ?1", &eid.bytes) catch {};
+        // 4. Delete tasks (reference goals)
+        for (task_ids) |tid| {
+            self.deleteByBlob("DELETE FROM tasks WHERE id = ?1", &tid.bytes) catch {};
         }
-        // 5. Delete tasks (reference batches)
-        self.deleteByBlob("DELETE FROM tasks WHERE batch_id = ?1", &batch_id.bytes) catch {};
-        // 6. Delete the batch
-        self.deleteByBlob("DELETE FROM batches WHERE id = ?1", &batch_id.bytes) catch {};
+        // 5. Delete goals (reference dispatches)
+        self.deleteByBlob("DELETE FROM goals WHERE dispatch_id = ?1", &dispatch_id.bytes) catch {};
+        // 6. Delete the dispatch
+        self.deleteByBlob("DELETE FROM dispatches WHERE id = ?1", &dispatch_id.bytes) catch {};
     }
 
     fn deleteByBlob(self: *Store, sql: [:0]const u8, blob: []const u8) StoreError!void {
@@ -863,36 +863,36 @@ pub const Store = struct {
         _ = try stmt.step();
     }
 
-    pub fn getTasksByBatch(self: *Store, batch_id: Ulid, buf: []Task) StoreError![]Task {
+    pub fn getGoalsByDispatch(self: *Store, dispatch_id: Ulid, buf: []Goal) StoreError![]Goal {
         var stmt = try self.db.prepare(
-            "SELECT id, description, base_commit, base_branch, status, resolved_exploration_id, batch_id, created_at, updated_at FROM tasks WHERE batch_id = ?1 ORDER BY created_at",
+            "SELECT id, description, base_commit, base_branch, status, resolved_task_id, dispatch_id, created_at, updated_at FROM goals WHERE dispatch_id = ?1 ORDER BY created_at",
         );
         defer stmt.finalize();
-        try stmt.bindBlob(1, &batch_id.bytes);
+        try stmt.bindBlob(1, &dispatch_id.bytes);
 
         var count: usize = 0;
         while (count < buf.len) {
             const result = try stmt.step();
             if (result != .row) break;
-            buf[count] = try self.readTask(&stmt);
+            buf[count] = try self.readGoal(&stmt);
             count += 1;
         }
         if (count == buf.len) {
             const extra = try stmt.step();
             if (extra == .row) {
-                std.log.warn("getTasksByBatch: buffer full ({d}), results truncated", .{buf.len});
+                std.log.warn("getGoalsByDispatch: buffer full ({d}), results truncated", .{buf.len});
             }
         }
         return buf[0..count];
     }
 
-    fn readBatch(self: *Store, stmt: *sqlite.Stmt) StoreError!Batch {
+    fn readDispatch(self: *Store, stmt: *sqlite.Stmt) StoreError!Dispatch {
         return .{
             .id = readUlid(stmt, 0),
             .description = try self.dupeText(stmt.columnText(1)),
             .base_commit = try self.dupeText(stmt.columnText(2)),
             .base_branch = try self.dupeText(stmt.columnText(3)),
-            .status = BatchStatus.fromStr(stmt.columnText(4) orelse "active") catch .active,
+            .status = DispatchStatus.fromStr(stmt.columnText(4) orelse "active") catch .active,
             .merge_policy = MergePolicy.fromStr(stmt.columnText(5) orelse "semi") catch .semi,
             .merge_order = try self.dupeOptionalText(stmt.columnText(6)),
             .merge_progress = @intCast(stmt.columnInt64(7)),
@@ -926,7 +926,7 @@ test "store init and migrate" {
     defer store.deinit();
 }
 
-test "task roundtrip" {
+test "goal roundtrip" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var store = try Store.init(arena.allocator(), ":memory:");
@@ -934,48 +934,48 @@ test "task roundtrip" {
 
     const now = std.time.milliTimestamp();
     const id = Ulid.new();
-    const task = Task{
+    const g = Goal{
         .id = id,
         .description = "refactor auth",
         .base_commit = "abc123",
         .base_branch = "main",
         .status = .active,
-        .resolved_exploration_id = null,
-        .batch_id = null,
+        .resolved_task_id = null,
+        .dispatch_id = null,
         .created_at = now,
         .updated_at = now,
     };
-    try store.insertTask(task);
+    try store.insertGoal(g);
 
-    const got = try store.getTask(id);
+    const got = try store.getGoal(id);
     try std.testing.expectEqualSlices(u8, "refactor auth", got.description);
-    try std.testing.expectEqual(TaskStatus.active, got.status);
+    try std.testing.expectEqual(GoalStatus.active, got.status);
 }
 
-test "exploration roundtrip" {
+test "task roundtrip" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var store = try Store.init(arena.allocator(), ":memory:");
     defer store.deinit();
 
     const now = std.time.milliTimestamp();
-    const task_id = Ulid.new();
-    try store.insertTask(.{
-        .id = task_id,
+    const goal_id = Ulid.new();
+    try store.insertGoal(.{
+        .id = goal_id,
         .description = "test",
         .base_commit = "abc",
         .base_branch = "main",
         .status = .active,
-        .resolved_exploration_id = null,
-        .batch_id = null,
+        .resolved_task_id = null,
+        .dispatch_id = null,
         .created_at = now,
         .updated_at = now,
     });
 
-    const exp_id = Ulid.new();
-    try store.insertExploration(.{
-        .id = exp_id,
-        .task_id = task_id,
+    const task_id = Ulid.new();
+    try store.insertTask(.{
+        .id = task_id,
+        .goal_id = goal_id,
         .index = 1,
         .worktree_path = "/tmp/wt1",
         .branch_name = "agx/ABC/1",
@@ -986,10 +986,10 @@ test "exploration roundtrip" {
         .updated_at = now,
     });
 
-    var buf: [16]Exploration = undefined;
-    const exps = try store.getExplorationsByTask(task_id, &buf);
-    try std.testing.expectEqual(@as(usize, 1), exps.len);
-    try std.testing.expectEqualSlices(u8, "middleware extraction", exps[0].approach.?);
+    var buf: [16]Task = undefined;
+    const tasks = try store.getTasksByGoal(goal_id, &buf);
+    try std.testing.expectEqual(@as(usize, 1), tasks.len);
+    try std.testing.expectEqualSlices(u8, "middleware extraction", tasks[0].approach.?);
 }
 
 test "FTS search" {
@@ -999,23 +999,23 @@ test "FTS search" {
     defer store.deinit();
 
     const now = std.time.milliTimestamp();
-    const task_id = Ulid.new();
-    try store.insertTask(.{
-        .id = task_id,
+    const goal_id = Ulid.new();
+    try store.insertGoal(.{
+        .id = goal_id,
         .description = "refactor authentication middleware",
         .base_commit = "abc",
         .base_branch = "main",
         .status = .active,
-        .resolved_exploration_id = null,
-        .batch_id = null,
+        .resolved_task_id = null,
+        .dispatch_id = null,
         .created_at = now,
         .updated_at = now,
     });
 
-    const exp_id = Ulid.new();
-    try store.insertExploration(.{
-        .id = exp_id,
-        .task_id = task_id,
+    const task_id = Ulid.new();
+    try store.insertTask(.{
+        .id = task_id,
+        .goal_id = goal_id,
         .index = 1,
         .worktree_path = "/tmp/wt1",
         .branch_name = "agx/ABC/1",
@@ -1028,7 +1028,7 @@ test "FTS search" {
 
     try store.insertEvidence(.{
         .id = Ulid.new(),
-        .exploration_id = exp_id,
+        .exploration_id = task_id,
         .kind = .test_result,
         .status = .pass,
         .hash = null,
@@ -1040,15 +1040,15 @@ test "FTS search" {
     // Rebuild full index
     try store.indexForSearch();
 
-    // Search for "authentication" — should find task + evidence
+    // Search for "authentication" — should find goal + evidence
     var buf: [10]Store.SearchResult = undefined;
     const results = try store.searchFts("authentication", &buf);
     try std.testing.expect(results.len >= 2);
 
-    // Search for "JWT" — should find exploration approach
+    // Search for "JWT" — should find task approach
     const jwt_results = try store.searchFts("JWT", &buf);
     try std.testing.expect(jwt_results.len >= 1);
-    try std.testing.expectEqualSlices(u8, "exploration", jwt_results[0].entity_type);
+    try std.testing.expectEqualSlices(u8, "task", jwt_results[0].entity_type);
 
     // Search for something not indexed
     const no_results = try store.searchFts("nonexistent", &buf);
@@ -1062,24 +1062,24 @@ test "incremental FTS indexing" {
     defer store.deinit();
 
     const now = std.time.milliTimestamp();
-    const task_id = Ulid.new();
-    try store.insertTask(.{
-        .id = task_id,
+    const goal_id = Ulid.new();
+    try store.insertGoal(.{
+        .id = goal_id,
         .description = "implement websocket support",
         .base_commit = "def456",
         .base_branch = "main",
         .status = .active,
-        .resolved_exploration_id = null,
-        .batch_id = null,
+        .resolved_task_id = null,
+        .dispatch_id = null,
         .created_at = now,
         .updated_at = now,
     });
 
-    // Task should be searchable immediately (incremental index)
+    // Goal should be searchable immediately (incremental index)
     var buf: [10]Store.SearchResult = undefined;
     const results = try store.searchFts("websocket", &buf);
     try std.testing.expectEqual(@as(usize, 1), results.len);
-    try std.testing.expectEqualSlices(u8, "task", results[0].entity_type);
+    try std.testing.expectEqualSlices(u8, "goal", results[0].entity_type);
 }
 
 test "evidence roundtrip" {
@@ -1089,23 +1089,23 @@ test "evidence roundtrip" {
     defer store.deinit();
 
     const now = std.time.milliTimestamp();
-    const task_id = Ulid.new();
-    try store.insertTask(.{
-        .id = task_id,
+    const goal_id = Ulid.new();
+    try store.insertGoal(.{
+        .id = goal_id,
         .description = "test",
         .base_commit = "abc",
         .base_branch = "main",
         .status = .active,
-        .resolved_exploration_id = null,
-        .batch_id = null,
+        .resolved_task_id = null,
+        .dispatch_id = null,
         .created_at = now,
         .updated_at = now,
     });
 
-    const exp_id = Ulid.new();
-    try store.insertExploration(.{
-        .id = exp_id,
-        .task_id = task_id,
+    const task_id = Ulid.new();
+    try store.insertTask(.{
+        .id = task_id,
+        .goal_id = goal_id,
         .index = 1,
         .worktree_path = "/tmp/wt1",
         .branch_name = "agx/ABC/1",
@@ -1118,7 +1118,7 @@ test "evidence roundtrip" {
 
     try store.insertEvidence(.{
         .id = Ulid.new(),
-        .exploration_id = exp_id,
+        .exploration_id = task_id,
         .kind = .test_result,
         .status = .pass,
         .hash = "sha256:abc",
@@ -1128,23 +1128,23 @@ test "evidence roundtrip" {
     });
 
     var buf: [16]Evidence = undefined;
-    const evs = try store.getEvidenceByExploration(exp_id, &buf);
+    const evs = try store.getEvidenceByTask(task_id, &buf);
     try std.testing.expectEqual(@as(usize, 1), evs.len);
     try std.testing.expectEqualSlices(u8, "47/47 tests passed", evs[0].summary.?);
 }
 
-test "batch and getTasksByBatch" {
+test "dispatch and getGoalsByDispatch" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     var store = try Store.init(arena.allocator(), ":memory:");
     defer store.deinit();
 
     const now = std.time.milliTimestamp();
-    const batch_id = Ulid.new();
+    const dispatch_id = Ulid.new();
 
-    try store.insertBatch(.{
-        .id = batch_id,
-        .description = "Batch of 2 tasks",
+    try store.insertDispatch(.{
+        .id = dispatch_id,
+        .description = "Dispatch of 2 goals",
         .base_commit = "abc123",
         .base_branch = "main",
         .status = .active,
@@ -1155,73 +1155,73 @@ test "batch and getTasksByBatch" {
         .updated_at = now,
     });
 
-    // Create two tasks in the batch
-    const task1_id = Ulid.new();
-    try store.insertTask(.{
-        .id = task1_id,
+    // Create two goals in the dispatch
+    const goal1_id = Ulid.new();
+    try store.insertGoal(.{
+        .id = goal1_id,
         .description = "add auth",
         .base_commit = "abc123",
         .base_branch = "main",
         .status = .active,
-        .resolved_exploration_id = null,
-        .batch_id = batch_id,
+        .resolved_task_id = null,
+        .dispatch_id = dispatch_id,
         .created_at = now,
         .updated_at = now,
     });
 
-    const task2_id = Ulid.new();
-    try store.insertTask(.{
-        .id = task2_id,
+    const goal2_id = Ulid.new();
+    try store.insertGoal(.{
+        .id = goal2_id,
         .description = "add logging",
         .base_commit = "abc123",
         .base_branch = "main",
         .status = .active,
-        .resolved_exploration_id = null,
-        .batch_id = batch_id,
+        .resolved_task_id = null,
+        .dispatch_id = dispatch_id,
         .created_at = now + 1,
         .updated_at = now + 1,
     });
 
-    // Also create a task NOT in the batch
-    try store.insertTask(.{
+    // Also create a goal NOT in the dispatch
+    try store.insertGoal(.{
         .id = Ulid.new(),
-        .description = "unrelated task",
+        .description = "unrelated goal",
         .base_commit = "abc123",
         .base_branch = "main",
         .status = .active,
-        .resolved_exploration_id = null,
-        .batch_id = null,
+        .resolved_task_id = null,
+        .dispatch_id = null,
         .created_at = now,
         .updated_at = now,
     });
 
-    // Verify batch roundtrip
-    const got_batch = try store.getBatch(batch_id);
-    try std.testing.expectEqualSlices(u8, "Batch of 2 tasks", got_batch.description);
-    try std.testing.expectEqual(BatchStatus.active, got_batch.status);
-    try std.testing.expectEqual(MergePolicy.semi, got_batch.merge_policy);
+    // Verify dispatch roundtrip
+    const got_dispatch = try store.getDispatch(dispatch_id);
+    try std.testing.expectEqualSlices(u8, "Dispatch of 2 goals", got_dispatch.description);
+    try std.testing.expectEqual(DispatchStatus.active, got_dispatch.status);
+    try std.testing.expectEqual(MergePolicy.semi, got_dispatch.merge_policy);
 
-    // Verify getTasksByBatch returns only the 2 batch tasks
-    var task_buf: [16]Task = undefined;
-    const tasks = try store.getTasksByBatch(batch_id, &task_buf);
-    try std.testing.expectEqual(@as(usize, 2), tasks.len);
-    try std.testing.expectEqualSlices(u8, "add auth", tasks[0].description);
-    try std.testing.expectEqualSlices(u8, "add logging", tasks[1].description);
+    // Verify getGoalsByDispatch returns only the 2 dispatch goals
+    var goal_buf: [16]Goal = undefined;
+    const goals = try store.getGoalsByDispatch(dispatch_id, &goal_buf);
+    try std.testing.expectEqual(@as(usize, 2), goals.len);
+    try std.testing.expectEqualSlices(u8, "add auth", goals[0].description);
+    try std.testing.expectEqualSlices(u8, "add logging", goals[1].description);
 
-    // Verify batch_id is set on retrieved tasks
-    try std.testing.expect(tasks[0].batch_id != null);
+    // Verify dispatch_id is set on retrieved goals
+    try std.testing.expect(goals[0].dispatch_id != null);
 
-    // Verify getActiveBatch works
-    const active = try store.getActiveBatch();
-    try std.testing.expectEqualSlices(u8, "Batch of 2 tasks", active.description);
+    // Verify getActiveDispatch works
+    const active = try store.getActiveDispatch();
+    try std.testing.expectEqualSlices(u8, "Dispatch of 2 goals", active.description);
 
     // Update status and verify
-    try store.updateBatchStatus(batch_id, .completed);
-    const updated = try store.getBatch(batch_id);
-    try std.testing.expectEqual(BatchStatus.completed, updated.status);
+    try store.updateDispatchStatus(dispatch_id, .completed);
+    const updated = try store.getDispatch(dispatch_id);
+    try std.testing.expectEqual(DispatchStatus.completed, updated.status);
 
     // Update merge order
-    try store.updateBatchMergeOrder(batch_id, "[\"id1\",\"id2\"]");
-    const with_order = try store.getBatch(batch_id);
+    try store.updateDispatchMergeOrder(dispatch_id, "[\"id1\",\"id2\"]");
+    const with_order = try store.getDispatch(dispatch_id);
     try std.testing.expectEqualSlices(u8, "[\"id1\",\"id2\"]", with_order.merge_order.?);
 }

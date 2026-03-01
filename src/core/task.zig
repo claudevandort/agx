@@ -3,8 +3,10 @@ const Ulid = @import("ulid.zig").Ulid;
 
 pub const TaskStatus = enum {
     active,
-    resolved,
-    abandoned,
+    done,
+    kept,
+    archived,
+    discarded,
 
     pub fn toStr(self: TaskStatus) []const u8 {
         return @tagName(self);
@@ -20,12 +22,13 @@ pub const TaskStatus = enum {
 
 pub const Task = struct {
     id: Ulid,
-    description: []const u8,
-    base_commit: []const u8, // SHA hex
-    base_branch: []const u8,
+    goal_id: Ulid,
+    index: u32, // 1-based index within goal
+    worktree_path: []const u8,
+    branch_name: []const u8,
     status: TaskStatus,
-    resolved_exploration_id: ?Ulid, // which exploration was kept
-    batch_id: ?Ulid, // if part of a batch
-    created_at: i64, // ms since epoch
+    approach: ?[]const u8, // strategic description set early
+    summary: ?[]const u8, // outcome description set via `agx exploration done`
+    created_at: i64,
     updated_at: i64,
 };
