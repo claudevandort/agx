@@ -101,9 +101,9 @@ agx batch merge
 
 This will:
 1. Checkout the base branch
-2. Merge each task's branch in the computed order
+2. Merge each task's branch in the computed order, tracking progress
 3. Commit each clean merge with AGX-Batch and AGX-Task trailers
-4. Stop on conflicts for resolution
+4. Pause on conflicts — batch enters `conflict` status until resolved with `--continue`
 
 ### Conflict resolution
 
@@ -113,7 +113,7 @@ For each conflicted merge step:
 
 1. Show the user which files have conflicts and a brief summary of what both sides changed
 2. Ask the user using AskUserQuestion with these options:
-   - **"Autonomous"** — you read the conflicted files, understand both tasks' intent, resolve the conflicts, and commit
+   - **"Autonomous"** — you read the conflicted files, understand both tasks' intent, resolve the conflicts, and continue
    - **"Manual"** — you show the full conflict markers to the user and wait for them to resolve and tell you when done
 3. Only proceed with resolution after the user responds
 
@@ -122,10 +122,17 @@ Do NOT batch multiple conflict resolutions into a single question — ask per me
 **After autonomous resolution**: Read the conflicted files, understand both tasks' intent from their approach/evidence, edit files to resolve, then:
 ```bash
 git add <resolved files>
-git commit -m "agx batch merge: <task description>"
+agx batch merge --continue
 ```
 
-**After manual resolution**: Show all conflict markers to the user and wait for them to tell you they've resolved them.
+**After manual resolution**: Show all conflict markers to the user. Wait for them to confirm resolution, then:
+```bash
+agx batch merge --continue
+```
+
+`--continue` commits the resolved merge, updates progress, and continues merging remaining tasks. On another conflict, the batch pauses again — repeat this process.
+
+Do NOT use raw `git commit` to commit resolved conflicts — always use `agx batch merge --continue` so the batch tracks progress correctly.
 
 ## 6. Export context
 
