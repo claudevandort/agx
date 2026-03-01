@@ -22,6 +22,8 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         try runStatus(alloc, sub_args, stdout, stderr);
     } else if (std.mem.eql(u8, subcmd, "merge")) {
         try runMerge(alloc, sub_args, stdout, stderr);
+    } else if (std.mem.eql(u8, subcmd, "cancel")) {
+        try runCancel(alloc, sub_args, stdout, stderr);
     } else {
         try stderr.print("agx batch: unknown subcommand '{s}'\n", .{subcmd});
         try printUsage(stderr);
@@ -41,6 +43,7 @@ fn printUsage(w: *std.Io.Writer) !void {
         \\  status [--batch <id>]                Show batch and per-task status
         \\  merge [--batch <id>] [--dry-run]     Merge completed tasks sequentially
         \\        [--continue]
+        \\  cancel [--batch <id>]                Cancel an active batch
         \\
         \\Create options:
         \\  --tasks "desc1" "desc2" ...   Task descriptions (required, consumes remaining args)
@@ -542,4 +545,63 @@ fn runMerge(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, 
 
     try ctx.store.updateBatchStatus(batch.id, .completed);
     try stdout.print("\nAll {d} tasks merged successfully. Batch completed.\n", .{merge_order.len});
+}
+
+// ── cancel subcommand ──
+
+fn runCancel(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !void {
+    _ = args; // --batch prefix lookup not yet implemented
+
+    var arena = std.heap.ArenaAllocator.init(alloc);
+    defer arena.deinit();
+    const aa = arena.allocator();
+
+    var ctx = CliContext.open(aa, stderr);
+    defer ctx.deinit();
+
+    const batch = ctx.store.getActiveBatch() catch {
+        try stderr.print("error: no active batch found\n", .{});
+        try stderr.flush();
+        std.process.exit(1);
+    };
+
+    const batch_short = batch.id.short(6);
+    const prev_status = batch.status;
+
+    // Abort any in-progress git merge if the batch was in conflict or merging state
+    if (prev_status == .conflict or prev_status == .merging) {
+        ctx.git.mergeAbort() catch {};
+    }
+
+    // Mark batch as abandoned
+    try ctx.store.updateBatchStatus(batch.id, .abandoned);
+
+    // Report what was cancelled
+    try stdout.print("Cancelled batch {s}: {s}\n", .{ &batch_short, batch.description });
+    try stdout.print("Previous status: {s}\n", .{prev_status.toStr()});
+
+    if (prev_status == .conflict) {
+        try stdout.print("Aborted in-progress merge (was paused on conflict).\n", .{});
+    } else if (prev_status == .merging) {
+        try stdout.print("Aborted in-progress merge.\n", .{});
+    }
+
+    // Show task summary
+    var task_buf: [64]agx.Task = undefined;
+    const tasks = try ctx.store.getTasksByBatch(batch.id, &task_buf);
+
+    if (tasks.len > 0) {
+        var done_count: u32 = 0;
+        var active_count: u32 = 0;
+        for (tasks) |t| {
+            if (t.status == .resolved) done_count += 1;
+            if (t.status == .active) active_count += 1;
+        }
+        try stdout.print("\nTasks: {d} total, {d} completed, {d} active\n", .{ tasks.len, done_count, active_count });
+        if (batch.merge_progress > 0) {
+            try stdout.print("Merge progress: {d}/{d} tasks had been merged\n", .{ batch.merge_progress, tasks.len });
+        }
+    }
+
+    try stdout.print("\nBatch is now abandoned. Run 'agx clean' to remove worktrees and branches.\n", .{});
 }
