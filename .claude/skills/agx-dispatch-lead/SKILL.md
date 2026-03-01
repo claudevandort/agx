@@ -151,6 +151,10 @@ After exporting context, shut down teammates and clean up:
 agx exploration clean
 ```
 
+## Important
+
+- **Never change the working directory.** Always run `agx` and `git` commands from the repository root. When inspecting worktree contents, use absolute paths (e.g., `git -C <worktree_path> diff`) or prefix with `cd /path/to/repo &&`. Never `cd` into a worktree — subsequent `agx` commands will fail with "agx not initialized" because the cwd is no longer the repo root.
+
 ## Key differences from /agx-explore-lead
 
 - `/agx-explore-lead`: One goal, N tasks competing with different approaches — pick the best one

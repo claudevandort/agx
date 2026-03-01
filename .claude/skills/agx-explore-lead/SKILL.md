@@ -116,6 +116,7 @@ Then shut down teammates and delete the team.
 
 ## Important
 
+- **Never change the working directory.** Always run `agx` commands from the repository root. When viewing worktree diffs, use absolute paths (e.g., `git -C <worktree_path> diff`) or prefix with `cd /path/to/repo &&`. Never `cd` into a worktree — subsequent `agx` commands will fail with "agx not initialized" because the cwd is no longer the repo root.
 - Always wait for all teammates to finish before comparing.
 - Run `agx exploration compare` before deciding which to keep.
 - Use `agx exploration archive` (not `discard`) for tasks with useful insights.
