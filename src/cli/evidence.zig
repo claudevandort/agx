@@ -115,7 +115,7 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     const now = std.time.milliTimestamp();
     try store.insertEvidence(.{
         .id = agx.Ulid.new(),
-        .exploration_id = task_id,
+        .task_id = task_id,
         .kind = kind,
         .status = status,
         .hash = hash,

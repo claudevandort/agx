@@ -300,11 +300,11 @@ pub const Store = struct {
 
     pub fn insertSession(self: *Store, sess: Session) StoreError!void {
         var stmt = try self.db.prepare(
-            "INSERT INTO sessions (id, exploration_id, agent_type, model_version, environment_fingerprint, initial_prompt, exit_reason, started_at, ended_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO sessions (id, task_id, agent_type, model_version, environment_fingerprint, initial_prompt, exit_reason, started_at, ended_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
         );
         defer stmt.finalize();
         try stmt.bindBlob(1, &sess.id.bytes);
-        try stmt.bindBlob(2, &sess.exploration_id.bytes);
+        try stmt.bindBlob(2, &sess.task_id.bytes);
         try stmt.bindOptionalText(3, sess.agent_type);
         try stmt.bindOptionalText(4, sess.model_version);
         try stmt.bindOptionalText(5, sess.environment_fingerprint);
@@ -329,7 +329,7 @@ pub const Store = struct {
     pub fn getSessionsByTask(self: *Store, task_id: Ulid, buf: []Session) StoreError![]Session {
         const stmt = try self.getCached(
             &self.cached_sessions_by_task,
-            "SELECT id, exploration_id, agent_type, model_version, environment_fingerprint, initial_prompt, exit_reason, started_at, ended_at FROM sessions WHERE exploration_id = ?1 ORDER BY started_at",
+            "SELECT id, task_id, agent_type, model_version, environment_fingerprint, initial_prompt, exit_reason, started_at, ended_at FROM sessions WHERE task_id = ?1 ORDER BY started_at",
         );
         try stmt.bindBlob(1, &task_id.bytes);
 
@@ -339,7 +339,7 @@ pub const Store = struct {
             if (result != .row) break;
             buf[count] = .{
                 .id = readUlid(stmt, 0),
-                .exploration_id = readUlid(stmt, 1),
+                .task_id = readUlid(stmt, 1),
                 .agent_type = try self.dupeOptionalText(stmt.columnText(2)),
                 .model_version = try self.dupeOptionalText(stmt.columnText(3)),
                 .environment_fingerprint = try self.dupeOptionalText(stmt.columnText(4)),
@@ -427,7 +427,7 @@ pub const Store = struct {
 
     pub fn countErrorsByTask(self: *Store, task_id: Ulid) StoreError!i64 {
         var stmt = try self.db.prepare(
-            "SELECT COUNT(*) FROM events e JOIN sessions s ON e.session_id = s.id WHERE s.exploration_id = ?1 AND e.kind = 'error'",
+            "SELECT COUNT(*) FROM events e JOIN sessions s ON e.session_id = s.id WHERE s.task_id = ?1 AND e.kind = 'error'",
         );
         defer stmt.finalize();
         try stmt.bindBlob(1, &task_id.bytes);
@@ -439,11 +439,11 @@ pub const Store = struct {
 
     pub fn insertEvidence(self: *Store, ev: Evidence) StoreError!void {
         var stmt = try self.db.prepare(
-            "INSERT INTO evidence (id, exploration_id, kind, status, hash, summary, raw_path, recorded_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            "INSERT INTO evidence (id, task_id, kind, status, hash, summary, raw_path, recorded_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         );
         defer stmt.finalize();
         try stmt.bindBlob(1, &ev.id.bytes);
-        try stmt.bindBlob(2, &ev.exploration_id.bytes);
+        try stmt.bindBlob(2, &ev.task_id.bytes);
         try stmt.bindText(3, ev.kind.toStr());
         try stmt.bindText(4, ev.status.toStr());
         try stmt.bindOptionalText(5, ev.hash);
@@ -455,7 +455,7 @@ pub const Store = struct {
         if (ev.summary) |s| {
             var lookup = self.db.prepare("SELECT goal_id FROM tasks WHERE id = ?1") catch return;
             defer lookup.finalize();
-            lookup.bindBlob(1, &ev.exploration_id.bytes) catch return;
+            lookup.bindBlob(1, &ev.task_id.bytes) catch return;
             if ((lookup.step() catch return) == .row) {
                 const goal_id = readUlid(&lookup, 0);
                 self.indexEntity("evidence", ev.id, goal_id, s);
@@ -466,7 +466,7 @@ pub const Store = struct {
     pub fn getEvidenceByTask(self: *Store, task_id: Ulid, buf: []Evidence) StoreError![]Evidence {
         const stmt = try self.getCached(
             &self.cached_evidence_by_task,
-            "SELECT id, exploration_id, kind, status, hash, summary, raw_path, recorded_at FROM evidence WHERE exploration_id = ?1 ORDER BY recorded_at",
+            "SELECT id, task_id, kind, status, hash, summary, raw_path, recorded_at FROM evidence WHERE task_id = ?1 ORDER BY recorded_at",
         );
         try stmt.bindBlob(1, &task_id.bytes);
 
@@ -476,7 +476,7 @@ pub const Store = struct {
             if (result != .row) break;
             buf[count] = .{
                 .id = readUlid(stmt, 0),
-                .exploration_id = readUlid(stmt, 1),
+                .task_id = readUlid(stmt, 1),
                 .kind = EvidenceKind.fromStr(stmt.columnText(2) orelse "custom") catch .custom,
                 .status = EvidenceStatus.fromStr(stmt.columnText(3) orelse "error") catch .@"error",
                 .hash = try self.dupeOptionalText(stmt.columnText(4)),
@@ -568,7 +568,7 @@ pub const Store = struct {
     pub const SearchResult = struct {
         entity_type: []const u8,
         entity_id: []const u8,
-        task_id: []const u8,
+        goal_id: []const u8,
         snippet: []const u8,
         rank: f64,
     };
@@ -576,7 +576,7 @@ pub const Store = struct {
     /// Full-text search across the context_fts index. Returns ranked results with snippets.
     pub fn searchFts(self: *Store, query: []const u8, buf: []SearchResult) StoreError![]SearchResult {
         var stmt = try self.db.prepare(
-            "SELECT entity_type, entity_id, task_id, snippet(context_fts, 4, '\xc2\xbb', '\xc2\xab', '\xe2\x80\xa6', 24), rank FROM context_fts WHERE context_fts MATCH ?1 ORDER BY rank LIMIT ?2",
+            "SELECT entity_type, entity_id, goal_id, snippet(context_fts, 4, '\xc2\xbb', '\xc2\xab', '\xe2\x80\xa6', 24), rank FROM context_fts WHERE context_fts MATCH ?1 ORDER BY rank LIMIT ?2",
         );
         defer stmt.finalize();
         try stmt.bindText(1, query);
@@ -589,7 +589,7 @@ pub const Store = struct {
             buf[count] = .{
                 .entity_type = try self.dupeText(stmt.columnText(0)),
                 .entity_id = try self.dupeText(stmt.columnText(1)),
-                .task_id = try self.dupeText(stmt.columnText(2)),
+                .goal_id = try self.dupeText(stmt.columnText(2)),
                 .snippet = try self.dupeText(stmt.columnText(3)),
                 .rank = stmt.columnDouble(4),
             };
@@ -603,7 +603,7 @@ pub const Store = struct {
     fn indexEntity(self: *Store, entity_type: []const u8, entity_id: Ulid, goal_id: Ulid, content: []const u8) void {
         if (content.len == 0) return;
         var stmt = self.db.prepare(
-            "INSERT INTO context_fts (entity_type, entity_id, task_id, source, content) VALUES (?1, ?2, ?3, 'db', ?4)",
+            "INSERT INTO context_fts (entity_type, entity_id, goal_id, source, content) VALUES (?1, ?2, ?3, 'db', ?4)",
         ) catch return;
         defer stmt.finalize();
         const eid = entity_id.encode();
@@ -656,7 +656,7 @@ pub const Store = struct {
         // Index evidence
         {
             var stmt = try self.db.prepare(
-                "SELECT ev.id, t.goal_id, ev.summary FROM evidence ev JOIN tasks t ON ev.exploration_id = t.id",
+                "SELECT ev.id, t.goal_id, ev.summary FROM evidence ev JOIN tasks t ON ev.task_id = t.id",
             );
             defer stmt.finalize();
             while (true) {
@@ -690,12 +690,12 @@ pub const Store = struct {
             const content = std.fs.cwd().readFileAlloc(self.alloc, summary_path, 1024 * 1024) catch continue;
             const parsed = fm_mod.parseFrontmatter(content);
 
-            const goal_id_str = parsed.fm.task_id orelse entry.name;
+            const goal_id_str = parsed.fm.goal_id orelse entry.name;
 
             // Index the description
             if (parsed.fm.description) |desc| {
                 var stmt = self.db.prepare(
-                    "INSERT INTO context_fts (entity_type, entity_id, task_id, source, content) VALUES ('goal', ?1, ?1, 'file', ?2)",
+                    "INSERT INTO context_fts (entity_type, entity_id, goal_id, source, content) VALUES ('goal', ?1, ?1, 'file', ?2)",
                 ) catch continue;
                 defer stmt.finalize();
                 stmt.bindText(1, goal_id_str) catch continue;
@@ -707,7 +707,7 @@ pub const Store = struct {
             const body = content[parsed.body_start..];
             if (body.len > 0) {
                 var stmt = self.db.prepare(
-                    "INSERT INTO context_fts (entity_type, entity_id, task_id, source, content) VALUES ('context', ?1, ?1, 'file', ?2)",
+                    "INSERT INTO context_fts (entity_type, entity_id, goal_id, source, content) VALUES ('context', ?1, ?1, 'file', ?2)",
                 ) catch continue;
                 defer stmt.finalize();
                 stmt.bindText(1, goal_id_str) catch continue;
@@ -840,11 +840,11 @@ pub const Store = struct {
         }
         // 2. Delete sessions (reference tasks)
         for (task_ids) |tid| {
-            self.deleteByBlob("DELETE FROM sessions WHERE exploration_id = ?1", &tid.bytes) catch {};
+            self.deleteByBlob("DELETE FROM sessions WHERE task_id = ?1", &tid.bytes) catch {};
         }
         // 3. Delete evidence (reference tasks)
         for (task_ids) |tid| {
-            self.deleteByBlob("DELETE FROM evidence WHERE exploration_id = ?1", &tid.bytes) catch {};
+            self.deleteByBlob("DELETE FROM evidence WHERE task_id = ?1", &tid.bytes) catch {};
         }
         // 4. Delete tasks (reference goals)
         for (task_ids) |tid| {
@@ -1028,7 +1028,7 @@ test "FTS search" {
 
     try store.insertEvidence(.{
         .id = Ulid.new(),
-        .exploration_id = task_id,
+        .task_id = task_id,
         .kind = .test_result,
         .status = .pass,
         .hash = null,
@@ -1118,7 +1118,7 @@ test "evidence roundtrip" {
 
     try store.insertEvidence(.{
         .id = Ulid.new(),
-        .exploration_id = task_id,
+        .task_id = task_id,
         .kind = .test_result,
         .status = .pass,
         .hash = "sha256:abc",

@@ -32,7 +32,7 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     try stdout.flush();
 }
 
-fn showAllGoals(store: *agx.Store, alloc: Allocator, stdout: *std.Io.Writer) !void {
+fn showAllGoals(store: *agx.Store, _: Allocator, stdout: *std.Io.Writer) !void {
     var goal_buf: [32]agx.Goal = undefined;
     const goals = try store.getAllGoals(&goal_buf);
 
@@ -44,11 +44,11 @@ fn showAllGoals(store: *agx.Store, alloc: Allocator, stdout: *std.Io.Writer) !vo
     for (goals) |g| {
         const short = g.id.short(6);
         try stdout.print("{s}  {s:<12} {s:<20} base:{s}\n", .{ &short, g.status.toStr(), g.description, g.base_branch });
-        try showTasks(store, alloc, g.id, stdout);
+        try showTasks(store, g.id, stdout);
     }
 }
 
-fn showGoalByFilter(store: *agx.Store, alloc: Allocator, filter: []const u8, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !void {
+fn showGoalByFilter(store: *agx.Store, _: Allocator, filter: []const u8, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !void {
     var goal_buf: [32]agx.Goal = undefined;
     const goals = try store.getAllGoals(&goal_buf);
 
@@ -62,7 +62,7 @@ fn showGoalByFilter(store: *agx.Store, alloc: Allocator, filter: []const u8, std
             try stdout.print("  Base:   {s} ({s})\n", .{ g.base_branch, g.base_commit[0..@min(8, g.base_commit.len)] });
             try stdout.print("\n", .{});
 
-            try showTasks(store, alloc, g.id, stdout);
+            try showTasks(store, g.id, stdout);
             return;
         }
     }
@@ -72,7 +72,7 @@ fn showGoalByFilter(store: *agx.Store, alloc: Allocator, filter: []const u8, std
     std.process.exit(1);
 }
 
-fn showTasks(store: *agx.Store, _: Allocator, goal_id: agx.Ulid, stdout: *std.Io.Writer) !void {
+fn showTasks(store: *agx.Store, goal_id: agx.Ulid, stdout: *std.Io.Writer) !void {
     var buf: [32]agx.Task = undefined;
     const tasks = try store.getTasksByGoal(goal_id, &buf);
 

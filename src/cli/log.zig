@@ -156,11 +156,9 @@ fn printEvent(w: *std.Io.Writer, ev: *const agx.Event) !void {
     if (ev.data) |data| {
         // Show first 80 chars of data, single line
         const max_len = @min(data.len, 80);
-        var preview = data[0..max_len];
+        const truncated = data[0..max_len];
         // Truncate at newline
-        if (std.mem.indexOfScalar(u8, preview, '\n')) |nl| {
-            preview = preview[0..nl];
-        }
+        const preview = if (std.mem.indexOfScalar(u8, truncated, '\n')) |nl| truncated[0..nl] else truncated;
         try w.print("  {s}", .{preview});
         if (data.len > 80) try w.print("...", .{});
     }

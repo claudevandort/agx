@@ -21,8 +21,8 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     const aa = arena.allocator();
 
     // Find repo root via git
-    const git_ = agx.GitCli.init(aa, null);
-    const repo_root = git_.repoRoot() catch {
+    const git_cli = agx.GitCli.init(aa, null);
+    const repo_root = git_cli.repoRoot() catch {
         try stderr.print("error: not a git repository\n", .{});
         try stderr.flush();
         std.process.exit(1);
@@ -38,6 +38,12 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         try printUsage(stderr);
         try stderr.flush();
         std.process.exit(1);
+    }
+
+    if (std.mem.eql(u8, args[0], "--help") or std.mem.eql(u8, args[0], "-h")) {
+        try printUsage(stdout);
+        try stdout.flush();
+        return;
     }
 
     const subcmd = args[0];
@@ -291,7 +297,7 @@ fn runList(
             } else continue;
         }
 
-        const goal_id = entry.fm.task_id orelse entry.dir_name;
+        const goal_id = entry.fm.goal_id orelse entry.dir_name;
         const status = entry.fm.status orelse "-";
         const branch = entry.fm.base_branch orelse "-";
         const desc = entry.fm.description orelse "-";
@@ -381,7 +387,7 @@ fn tryFtsSearch(
             jw.beginObjectValue() catch return false;
             jw.stringField("type", r.entity_type) catch return false;
             jw.stringField("entity_id", r.entity_id) catch return false;
-            jw.stringField("goal_id", r.task_id) catch return false;
+            jw.stringField("goal_id", r.goal_id) catch return false;
             jw.stringField("snippet", r.snippet) catch return false;
             jw.floatField("rank", r.rank) catch return false;
             jw.endObject() catch return false;
@@ -395,7 +401,7 @@ fn tryFtsSearch(
             return true;
         }
         for (results, 1..) |r, idx| {
-            stdout.print("[{d}] {s}  {s}  ({d:.2})\n", .{ idx, r.entity_type, r.task_id, r.rank }) catch return false;
+            stdout.print("[{d}] {s}  {s}  ({d:.2})\n", .{ idx, r.entity_type, r.goal_id, r.rank }) catch return false;
             stdout.print("    {s}\n", .{r.snippet}) catch return false;
         }
         stdout.print("\n{d} result(s).\n", .{results.len}) catch return false;
@@ -426,7 +432,7 @@ fn runFileSearch(
     for (entries) |entry| {
         // Apply metadata filters
         if (goal_filter) |gf| {
-            const eid = entry.fm.task_id orelse entry.dir_name;
+            const eid = entry.fm.goal_id orelse entry.dir_name;
             if (!fm_mod.prefixMatch(eid, gf)) continue;
         }
 
@@ -443,7 +449,7 @@ fn runFileSearch(
 
         // Print match
         match_count += 1;
-        const goal_id = entry.fm.task_id orelse entry.dir_name;
+        const goal_id = entry.fm.goal_id orelse entry.dir_name;
         const desc = entry.fm.description orelse "-";
         const status = entry.fm.status orelse "-";
 

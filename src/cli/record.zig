@@ -11,6 +11,11 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         std.process.exit(1);
     }
 
+    if (std.mem.eql(u8, args[0], "--help") or std.mem.eql(u8, args[0], "-h")) {
+        try printUsage(stdout);
+        return;
+    }
+
     const subcmd = args[0];
     const sub_args = args[1..];
 

@@ -120,4 +120,4 @@ Then shut down teammates and delete the team.
 - Run `agx exploration compare` before deciding which to keep.
 - Use `agx exploration archive` (not `discard`) for tasks with useful insights.
 - `agx exploration pick` exports context by default — use `--no-context` to skip.
-- For **multiple independent goals** (not competing approaches to the same goal), use `/agx-batch-lead` instead.
+- For **multiple independent goals** (not competing approaches to the same goal), use `/agx-dispatch-lead` instead.

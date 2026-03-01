@@ -12,7 +12,7 @@ zig build test         # runs all unit tests (co-located in source files)
 zig build run -- <cmd> # build and run, e.g. zig build run -- exploration status
 ```
 
-Tests are embedded in source files (not in `test/`). `src/agx.zig` uses `testing.refAllDecls` to pull in all module tests transitively. Files with tests: `store.zig`, `ulid.zig`, `ingest.zig`, `json_writer.zig`.
+Tests are embedded in source files (not in `test/`). `src/agx.zig` uses `testing.refAllDecls` to pull in all module tests transitively. Files with tests: `store.zig`, `ulid.zig`, `ingest.zig`, `json_writer.zig`, `frontmatter.zig`, `overlap.zig`.
 
 ## What agx Does
 
@@ -70,7 +70,7 @@ Agent-aware version control layered on git. When multiple AI agents work the sam
 You MUST use the multi-agent workflow — do NOT implement multiple tasks yourself sequentially. Invoke the appropriate skill BEFORE exploring the codebase or reading source files. After invoking the skill, follow it step by step without deviation.
 
 - **`/agx-explore-lead`** — The user is giving one problem to solve and is asking to try different approaches or ways of implementing the solution. This skill includes instruction to spawn an agent team to try different approaches, compare results, and merge the winner.
-- **`/agx-batch-lead`** — The user is giving a list of problems to solve or features to implement (where there might be code overlap). This skill includes instructions to spawn an agent team to solve the list of tasks stated by the user, each agent taking one task each, and then merging everyone's changes sequentially.
+- **`/agx-dispatch-lead`** — The user is giving a list of problems to solve or features to implement (where there might be code overlap). This skill includes instructions to spawn an agent team to solve the list of tasks stated by the user, each agent taking one task each, and then merging everyone's changes sequentially.
 
 ## Zig 0.15 Notes
 

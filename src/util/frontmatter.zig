@@ -2,12 +2,12 @@ const std = @import("std");
 
 /// Parsed YAML-style frontmatter from a context markdown file.
 pub const Frontmatter = struct {
-    task_id: ?[]const u8 = null,
+    goal_id: ?[]const u8 = null,
     description: ?[]const u8 = null,
     status: ?[]const u8 = null,
     base_branch: ?[]const u8 = null,
     date: ?[]const u8 = null,
-    explorations: ?[]const u8 = null,
+    tasks: ?[]const u8 = null,
 };
 
 pub const ParseResult = struct {
@@ -44,8 +44,8 @@ pub fn parseFrontmatter(content: []const u8) ParseResult {
             const key = std.mem.trim(u8, line[0..colon], &[_]u8{ ' ', '\t' });
             const val = std.mem.trim(u8, line[colon + 1 ..], &[_]u8{ ' ', '\t' });
             if (val.len > 0) {
-                if (std.mem.eql(u8, key, "task_id")) {
-                    fm.task_id = val;
+                if (std.mem.eql(u8, key, "goal_id")) {
+                    fm.goal_id = val;
                 } else if (std.mem.eql(u8, key, "description")) {
                     fm.description = val;
                 } else if (std.mem.eql(u8, key, "status")) {
@@ -54,8 +54,8 @@ pub fn parseFrontmatter(content: []const u8) ParseResult {
                     fm.base_branch = val;
                 } else if (std.mem.eql(u8, key, "date")) {
                     fm.date = val;
-                } else if (std.mem.eql(u8, key, "explorations")) {
-                    fm.explorations = val;
+                } else if (std.mem.eql(u8, key, "tasks")) {
+                    fm.tasks = val;
                 }
             }
         }
@@ -90,43 +90,43 @@ pub fn prefixMatch(id: []const u8, prefix: []const u8) bool {
 test "parseFrontmatter basic" {
     const content =
         \\---
-        \\task_id: 01JK7MTEST123456789ABCDE
+        \\goal_id: 01JK7MTEST123456789ABCDE
         \\description: Test task
         \\status: resolved
         \\base_branch: main
         \\date: 2025-01-15
-        \\explorations: 3
+        \\tasks: 3
         \\---
         \\# Body content here
         \\
     ;
 
     const result = parseFrontmatter(content);
-    try std.testing.expectEqualSlices(u8, "01JK7MTEST123456789ABCDE", result.fm.task_id.?);
+    try std.testing.expectEqualSlices(u8, "01JK7MTEST123456789ABCDE", result.fm.goal_id.?);
     try std.testing.expectEqualSlices(u8, "Test task", result.fm.description.?);
     try std.testing.expectEqualSlices(u8, "resolved", result.fm.status.?);
     try std.testing.expectEqualSlices(u8, "main", result.fm.base_branch.?);
     try std.testing.expectEqualSlices(u8, "2025-01-15", result.fm.date.?);
-    try std.testing.expectEqualSlices(u8, "3", result.fm.explorations.?);
+    try std.testing.expectEqualSlices(u8, "3", result.fm.tasks.?);
     try std.testing.expect(std.mem.startsWith(u8, content[result.body_start..], "# Body content here"));
 }
 
 test "parseFrontmatter missing closing delimiter" {
     const content =
         \\---
-        \\task_id: ABC
+        \\goal_id: ABC
         \\no closing delimiter
         \\
     ;
     const result = parseFrontmatter(content);
-    try std.testing.expect(result.fm.task_id == null);
+    try std.testing.expect(result.fm.goal_id == null);
     try std.testing.expect(result.body_start == 0);
 }
 
 test "parseFrontmatter no frontmatter" {
     const content = "# Just a normal markdown file\n";
     const result = parseFrontmatter(content);
-    try std.testing.expect(result.fm.task_id == null);
+    try std.testing.expect(result.fm.goal_id == null);
     try std.testing.expect(result.body_start == 0);
 }
 

@@ -117,8 +117,7 @@ fn cleanWorktree(git: *const GitCli, path: []const u8) u32 {
 
 /// Delete a branch only if it exists. Returns 1 if deleted, 0 if skipped.
 fn cleanBranch(git: *const GitCli, name: []const u8) u32 {
-    // Check if the branch exists by trying to resolve it
-    git.branchExists(name) catch return 0;
+    if (!git.branchExists(name)) return 0;
     git.deleteBranch(name) catch return 0;
     return 1;
 }

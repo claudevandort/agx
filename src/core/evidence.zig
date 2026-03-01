@@ -41,7 +41,7 @@ pub const EvidenceStatus = enum {
 
 pub const Evidence = struct {
     id: Ulid,
-    exploration_id: Ulid,
+    task_id: Ulid,
     kind: EvidenceKind,
     status: EvidenceStatus,
     hash: ?[]const u8, // content hash of raw output

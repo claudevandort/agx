@@ -193,7 +193,7 @@ fn runCreate(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer,
         const session_id = Ulid.new();
         try ctx.store.insertSession(.{
             .id = session_id,
-            .exploration_id = task_id,
+            .task_id = task_id,
             .agent_type = null,
             .model_version = null,
             .environment_fingerprint = null,
@@ -239,17 +239,49 @@ fn runStatus(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer,
     defer ctx.deinit();
 
     // Parse --dispatch <id>
+    var dispatch_filter: ?[]const u8 = null;
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         if (std.mem.eql(u8, args[i], "--dispatch")) {
-            i += 1; // skip value
+            i += 1;
+            if (i < args.len) dispatch_filter = args[i];
         }
     }
 
-    const d = ctx.store.getActiveDispatch() catch {
-        try stderr.print("error: no active dispatch found\n", .{});
-        try stderr.flush();
-        std.process.exit(1);
+    const d = blk: {
+        if (dispatch_filter) |prefix| {
+            var dispatch_buf: [32]agx.Dispatch = undefined;
+            const all_dispatches = ctx.store.getAllDispatches(&dispatch_buf) catch {
+                try stderr.print("error: could not query dispatches\n", .{});
+                try stderr.flush();
+                std.process.exit(1);
+            };
+            var matched: ?agx.Dispatch = null;
+            for (all_dispatches) |dd| {
+                const enc = dd.id.encode();
+                if (std.mem.startsWith(u8, &enc, prefix)) {
+                    if (matched != null) {
+                        try stderr.print("error: ambiguous dispatch prefix '{s}'\n", .{prefix});
+                        try stderr.flush();
+                        std.process.exit(1);
+                    }
+                    matched = dd;
+                }
+            }
+            if (matched) |m| {
+                break :blk m;
+            } else {
+                try stderr.print("error: no dispatch matching prefix '{s}'\n", .{prefix});
+                try stderr.flush();
+                std.process.exit(1);
+            }
+        } else {
+            break :blk ctx.store.getActiveDispatch() catch {
+                try stderr.print("error: no active dispatch found\n", .{});
+                try stderr.flush();
+                std.process.exit(1);
+            };
+        }
     };
 
     const dispatch_short = d.id.short(6);
@@ -271,13 +303,6 @@ fn runStatus(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer,
 
     for (goals, 0..) |g, idx| {
         const goal_enc = g.id.encode();
-
-        // Get task info
-        var task_buf: [4]agx.Task = undefined;
-        const tasks = ctx.store.getTasksByGoal(g.id, &task_buf) catch &[_]agx.Task{};
-
-        const approach: []const u8 = if (tasks.len > 0 and tasks[0].approach != null) tasks[0].approach.? else "-";
-        _ = approach;
 
         const max_desc: usize = 40;
         const desc_display = if (g.description.len > max_desc) g.description[0..max_desc] else g.description;

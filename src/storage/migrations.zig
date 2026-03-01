@@ -33,7 +33,7 @@ pub const migrations = [_][]const u8{
     \\
     \\CREATE TABLE IF NOT EXISTS sessions (
     \\    id BLOB PRIMARY KEY,
-    \\    exploration_id BLOB NOT NULL REFERENCES tasks(id),
+    \\    task_id BLOB NOT NULL REFERENCES tasks(id),
     \\    agent_type TEXT,
     \\    model_version TEXT,
     \\    environment_fingerprint TEXT,
@@ -53,7 +53,7 @@ pub const migrations = [_][]const u8{
     \\
     \\CREATE TABLE IF NOT EXISTS evidence (
     \\    id BLOB PRIMARY KEY,
-    \\    exploration_id BLOB NOT NULL REFERENCES tasks(id),
+    \\    task_id BLOB NOT NULL REFERENCES tasks(id),
     \\    kind TEXT NOT NULL,
     \\    status TEXT NOT NULL,
     \\    hash TEXT,
@@ -71,9 +71,9 @@ pub const migrations = [_][]const u8{
     \\);
     \\
     \\CREATE INDEX IF NOT EXISTS idx_tasks_goal ON tasks(goal_id);
-    \\CREATE INDEX IF NOT EXISTS idx_sessions_task ON sessions(exploration_id);
+    \\CREATE INDEX IF NOT EXISTS idx_sessions_task ON sessions(task_id);
     \\CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
-    \\CREATE INDEX IF NOT EXISTS idx_evidence_task ON evidence(exploration_id);
+    \\CREATE INDEX IF NOT EXISTS idx_evidence_task ON evidence(task_id);
     \\CREATE INDEX IF NOT EXISTS idx_snapshots_session ON snapshots(session_id);
     ,
     // Migration 1: ingest offset tracking
@@ -91,7 +91,7 @@ pub const migrations = [_][]const u8{
     \\CREATE VIRTUAL TABLE IF NOT EXISTS context_fts USING fts5(
     \\    entity_type,
     \\    entity_id UNINDEXED,
-    \\    task_id UNINDEXED,
+    \\    goal_id UNINDEXED,
     \\    source UNINDEXED,
     \\    content,
     \\    tokenize='porter unicode61'

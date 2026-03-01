@@ -40,7 +40,7 @@ pub fn getChangedFiles(alloc: Allocator, numstat_output: []const u8) ![][]const 
         }
     }
 
-    return files.items;
+    return try files.toOwnedSlice(alloc);
 }
 
 /// Compute optimal merge order based on file overlap.

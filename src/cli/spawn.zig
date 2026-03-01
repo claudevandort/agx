@@ -120,7 +120,7 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         const session_id = Ulid.new();
         try ctx.store.insertSession(.{
             .id = session_id,
-            .exploration_id = task_id,
+            .task_id = task_id,
             .agent_type = null,
             .model_version = null,
             .environment_fingerprint = null,

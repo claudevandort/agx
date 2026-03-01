@@ -21,7 +21,7 @@ pub const ExitReason = enum {
 
 pub const Session = struct {
     id: Ulid,
-    exploration_id: Ulid,
+    task_id: Ulid,
     agent_type: ?[]const u8, // e.g. "claude-code", "aider"
     model_version: ?[]const u8, // e.g. "claude-sonnet-4-20250514"
     environment_fingerprint: ?[]const u8, // toolchain/runtime digest

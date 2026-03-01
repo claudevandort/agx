@@ -127,12 +127,12 @@ pub const GitCli = struct {
         r.deinit(self.alloc);
     }
 
-    pub fn branchExists(self: *const GitCli, name: []const u8) !void {
-        const full_ref = try std.fmt.allocPrint(self.alloc, "refs/heads/{s}", .{name});
+    pub fn branchExists(self: *const GitCli, name: []const u8) bool {
+        const full_ref = std.fmt.allocPrint(self.alloc, "refs/heads/{s}", .{name}) catch return false;
         defer self.alloc.free(full_ref);
-        const r = try self.run(&.{ "show-ref", "--verify", "--quiet", full_ref });
+        const r = self.run(&.{ "show-ref", "--verify", "--quiet", full_ref }) catch return false;
         defer r.deinit(self.alloc);
-        if (!r.success) return error.GitCommandFailed;
+        return r.success;
     }
 
     // ── Worktree operations ──

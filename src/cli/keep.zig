@@ -127,11 +127,14 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     try ctx.store.updateGoalStatus(g.id, .resolved, t.id);
 
     // Export context (default on, skip with --no-context)
+    // Use a copy with updated status so the export reflects the resolved state
     if (!no_context) {
+        var resolved_goal = g;
+        resolved_goal.status = .resolved;
         if (agx.context_export.exportGoalContext(
             aa,
             &ctx.store,
-            &g,
+            &resolved_goal,
             ".agx/context",
         )) |context_dir| {
             try stdout.print("Context exported to {s}\n", .{context_dir});
