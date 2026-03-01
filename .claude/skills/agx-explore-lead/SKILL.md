@@ -55,14 +55,14 @@ Use `TeamCreate` to create a team, then spawn one teammate per task using the `A
 
 For each teammate:
 - Use `subagent_type: "general-purpose"` (they need to edit files)
-- Include `/agx-explore-teammate` in their prompt so they know how to use agx
+- Include `/agx-task-teammate` in their prompt so they know how to use agx
 - Tell them the goal description, their task index, and worktree path
 
 Example teammate prompt:
 ```
 Your working directory is <worktree_path>.
 You are agx task [1]. Your goal: "<goal description>".
-Invoke /agx-explore-teammate then work on the task.
+Invoke /agx-task-teammate then work on the task.
 ```
 
 Launch all teammates in parallel (multiple Agent tool calls in one message). Run them in the background so you can monitor progress.

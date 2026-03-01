@@ -89,8 +89,8 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         try stderr.print("warning: could not create agx-explore-lead skill: {s}\n", .{@errorName(err)});
         try stderr.flush();
     };
-    createSkillFile(aa, repo_root, "agx-explore-teammate", skill_files.agx_explore_teammate, stdout) catch |err| {
-        try stderr.print("warning: could not create agx-explore-teammate skill: {s}\n", .{@errorName(err)});
+    createSkillFile(aa, repo_root, "agx-task-teammate", skill_files.agx_task_teammate, stdout) catch |err| {
+        try stderr.print("warning: could not create agx-task-teammate skill: {s}\n", .{@errorName(err)});
         try stderr.flush();
     };
     createSkillFile(aa, repo_root, "agx-dispatch-lead", skill_files.agx_dispatch_lead, stdout) catch |err| {

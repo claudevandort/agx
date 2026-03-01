@@ -1,11 +1,11 @@
 ---
-name: agx-explore-teammate
-description: Use when working as a teammate agent inside an agx exploration worktree. Guides you through discovering your session, declaring your approach, recording evidence, and completing your task.
+name: agx-task-teammate
+description: Use when working as a teammate agent inside an agx worktree. Guides you through discovering your session, declaring your approach, recording evidence, and completing your task.
 ---
 
 # agx Teammate
 
-You are a teammate agent working inside an agx exploration worktree. agx tracks your work — approach, evidence, and completion — so the orchestrator can compare your results against other parallel tasks for the same goal.
+You are a teammate agent working inside an agx worktree. agx tracks your work — approach, evidence, and completion — so the lead can evaluate your results.
 
 ## First: discover your session
 
@@ -30,7 +30,7 @@ Examples:
 - `agx exploration approach "Replace callback pattern with async/await"`
 - `agx exploration approach "Minimal fix — patch the specific failing case"`
 
-This is shown in `agx exploration compare` and helps the orchestrator understand your strategy even before you finish.
+This is shown in `agx exploration compare` and helps the lead understand your strategy even before you finish.
 
 ### 2. Do your work
 
@@ -45,7 +45,7 @@ agx record event --kind decision --data "Using existing config parser instead of
 agx record event --kind decision --data "Skipping migration — schema change is backward-compatible"
 ```
 
-These feed into the decision log, which helps the orchestrator understand *why* you did what you did, not just *what* you did. Record decisions as you go — don't wait until the end.
+These feed into the decision log, which helps the lead understand *why* you did what you did, not just *what* you did. Record decisions as you go — don't wait until the end.
 
 ### 4. Record evidence
 
@@ -60,7 +60,7 @@ agx exploration evidence --kind lint_result --status pass --summary "no linting 
 **Evidence kinds:** `test_result`, `build_output`, `coverage_report`, `lint_result`, `benchmark`, `custom`
 **Statuses:** `pass`, `fail`, `error`, `skip`
 
-Always record evidence — it's how the orchestrator objectively compares tasks.
+Always record evidence — it's how the lead objectively evaluates tasks.
 
 ### 5. Commit, mark done, and notify the lead
 
@@ -79,9 +79,9 @@ Make your done summary concrete — what changed and what's the evidence it work
 
 ## Important
 
-- **Declare approach early** — don't wait until you're done. The orchestrator may check `agx exploration status` while you're still working.
+- **Declare approach early** — don't wait until you're done. The lead may check `agx exploration status` while you're still working.
 - **Record decisions as you go** — every significant choice (architecture, trade-offs, what you tried and rejected) should be a `agx record event --kind decision` call. These are preserved in the decision log when context is exported.
 - **Record evidence** — tasks without evidence are hard to evaluate. Run the project's tests and record results.
 - **Commit before `agx exploration done`** — your branch must have commits for merge to work. Uncommitted changes are invisible to `agx exploration compare` and will be lost during `agx dispatch merge`. Always `git add` + `git commit` before `agx exploration done`.
-- **Write a clear done summary** — this is what the orchestrator reads when comparing tasks.
+- **Write a clear done summary** — this is what the lead reads when evaluating tasks.
 - You are in an isolated worktree. You cannot break other tasks. Work freely.

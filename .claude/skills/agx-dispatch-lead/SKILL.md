@@ -58,12 +58,12 @@ For each teammate:
 - Set `subagent_type: "general-purpose"`
 - Set `isolation: "worktree"` is NOT needed — agx already created worktrees
 - Tell the teammate which worktree to `cd` into
-- Tell the teammate to use the `/agx-explore-teammate` skill
+- Tell the teammate to use the `/agx-task-teammate` skill
 - Give the teammate the goal description
 
 Example teammate prompt:
 ```
-You are working on a goal in an agx dispatch. cd into <worktree_path> and invoke the /agx-explore-teammate skill.
+You are working on a goal in an agx dispatch. cd into <worktree_path> and invoke the /agx-task-teammate skill.
 
 Your goal: <goal description>
 
