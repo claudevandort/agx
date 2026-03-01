@@ -307,6 +307,12 @@ pub const GitCli = struct {
         r.deinit(self.alloc);
     }
 
+    /// Amend the last commit with a new message.
+    pub fn commitAmend(self: *const GitCli, message: []const u8) !void {
+        const r = try self.runChecked(&.{ "commit", "--amend", "-m", message });
+        r.deinit(self.alloc);
+    }
+
     // ── Checkout ──
 
     pub fn checkout(self: *const GitCli, ref: []const u8) !void {

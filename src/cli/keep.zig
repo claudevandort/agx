@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const agx = @import("agx");
 const CliContext = @import("cli_common.zig").CliContext;
+const commit_message = @import("commit_message.zig");
 
 pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !void {
     var index_str: ?[]const u8 = null;
@@ -84,43 +85,13 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         std.process.exit(1);
     };
 
-    // Add commit trailers
-    var sess_buf: [8]agx.Session = undefined;
-    const sessions = ctx.store.getSessionsByTask(t.id, &sess_buf) catch &[_]agx.Session{};
-
-    const goal_short = g.id.short(6);
-
-    // Build trailers dynamically
-    var trailer_count: usize = 2; // AGX-Goal + AGX-Task always
-    if (sessions.len > 0 and sessions[0].agent_type != null) trailer_count += 1;
-    if (sessions.len > 0 and sessions[0].model_version != null) trailer_count += 1;
-
-    const trailers = try aa.alloc([2][]const u8, trailer_count);
-
-    var ti: usize = 0;
-    trailers[ti] = .{ "AGX-Goal", &goal_short };
-    ti += 1;
-
-    var idx_buf: [16]u8 = undefined;
-    const idx_str = std.fmt.bufPrint(&idx_buf, "{d}", .{index}) catch "?";
-    trailers[ti] = .{ "AGX-Task", idx_str };
-    ti += 1;
-
-    if (sessions.len > 0) {
-        if (sessions[0].agent_type) |agent| {
-            trailers[ti] = .{ "AGX-Agent", agent };
-            ti += 1;
-        }
-        if (sessions[0].model_version) |model| {
-            trailers[ti] = .{ "AGX-Model", model };
-            ti += 1;
-        }
-    }
-
-    ctx.git.addTrailers(trailers[0..ti]) catch {
-        try stderr.print("warning: could not add commit trailers\n", .{});
-        try stderr.flush();
-    };
+    // Amend merge commit with enriched message
+    if (commit_message.buildExplorationPickMessage(aa, &ctx.store, g, t, index)) |msg| {
+        ctx.git.commitAmend(msg) catch {
+            try stderr.print("warning: could not amend commit with enriched message\n", .{});
+            try stderr.flush();
+        };
+    } else |_| {}
 
     // Update DB: mark task as kept, resolve goal
     try ctx.store.updateTaskStatus(t.id, .kept, null);

@@ -5,6 +5,7 @@ const Ulid = agx.Ulid;
 const CliContext = @import("cli_common.zig").CliContext;
 const overlap = agx.dispatch_overlap;
 const JsonWriter = agx.json_writer.JsonWriter;
+const commit_message = @import("commit_message.zig");
 
 pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !void {
     if (args.len == 0) {
@@ -415,16 +416,28 @@ fn runMerge(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, 
             std.process.exit(1);
         }
 
-        // Commit the resolved merge
+        // Commit the resolved merge with enriched message
         const conflict_goal_idx = merge_order[start_step];
         const conflict_goal = goals[conflict_goal_idx];
-        const dispatch_enc = d.id.encode();
-        const goal_enc = conflict_goal.id.encode();
-        const commit_msg = try std.fmt.allocPrint(aa, "agx dispatch merge: {s}\n\nAGX-Dispatch: {s}\nAGX-Goal: {s}", .{
-            conflict_goal.description,
-            &dispatch_enc,
-            &goal_enc,
-        });
+        var conflict_task_buf: [4]agx.Task = undefined;
+        const conflict_tasks = try ctx.store.getTasksByGoal(conflict_goal.id, &conflict_task_buf);
+        const commit_msg = commit_message.buildDispatchMergeMessage(
+            aa,
+            &ctx.store,
+            d,
+            conflict_goal,
+            conflict_tasks[0],
+            start_step + 1,
+            merge_order.len,
+        ) catch blk: {
+            const dispatch_enc = d.id.encode();
+            const goal_enc = conflict_goal.id.encode();
+            break :blk try std.fmt.allocPrint(aa, "agx dispatch merge: {s}\n\nAGX-Dispatch: {s}\nAGX-Goal: {s}", .{
+                conflict_goal.description,
+                &dispatch_enc,
+                &goal_enc,
+            });
+        };
         ctx.git.mergeCommit(commit_msg) catch {
             try stderr.print("error: could not commit resolved merge for goal [{d}]\n", .{conflict_goal_idx + 1});
             try stderr.print("Stage your resolved files with 'git add' first.\n", .{});
@@ -541,13 +554,23 @@ fn runMerge(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, 
 
         switch (merge_result) {
             .clean => {
-                const dispatch_enc = d.id.encode();
-                const goal_enc = g.id.encode();
-                const commit_msg = try std.fmt.allocPrint(aa, "agx dispatch merge: {s}\n\nAGX-Dispatch: {s}\nAGX-Goal: {s}", .{
-                    g.description,
-                    &dispatch_enc,
-                    &goal_enc,
-                });
+                const commit_msg = commit_message.buildDispatchMergeMessage(
+                    aa,
+                    &ctx.store,
+                    d,
+                    g,
+                    tasks[0],
+                    step + 1,
+                    merge_order.len,
+                ) catch blk: {
+                    const dispatch_enc = d.id.encode();
+                    const goal_enc = g.id.encode();
+                    break :blk try std.fmt.allocPrint(aa, "agx dispatch merge: {s}\n\nAGX-Dispatch: {s}\nAGX-Goal: {s}", .{
+                        g.description,
+                        &dispatch_enc,
+                        &goal_enc,
+                    });
+                };
                 ctx.git.mergeCommit(commit_msg) catch {
                     try stderr.print("error: could not commit merge for goal [{d}]\n", .{goal_idx + 1});
                     try ctx.store.updateDispatchStatus(d.id, .failed);

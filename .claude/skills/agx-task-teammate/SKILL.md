@@ -38,14 +38,15 @@ Work on the task normally — edit files, run tests, make commits. You're in an 
 
 ### 3. Record decisions
 
-When you make a significant choice — picking one approach over another, choosing a library, deciding to refactor vs patch — record it:
+When you make a significant choice — picking one approach over another, choosing a library, deciding to refactor vs patch — record it. Include the context, the alternatives you considered, and the reasoning behind your choice. Decision text is embedded directly into merge commit messages, so write each one as a self-contained sentence that a future reader can understand without additional context.
+
 ```bash
-agx record event --kind decision --data "Chose middleware chain over monolithic handler for testability"
-agx record event --kind decision --data "Using existing config parser instead of adding a dependency"
-agx record event --kind decision --data "Skipping migration — schema change is backward-compatible"
+agx record event --kind decision --data "Chose middleware chain over monolithic handler — isolates each provider behind a common interface, makes unit testing possible without spinning up the full server"
+agx record event --kind decision --data "Using existing config parser instead of adding a dependency — the parser already handles nested keys and env var interpolation, which covers our use case"
+agx record event --kind decision --data "Skipping migration — the new column has a default value and the schema change is backward-compatible, so existing rows don't need backfilling"
 ```
 
-These feed into the decision log, which helps the lead understand *why* you did what you did, not just *what* you did. Record decisions as you go — don't wait until the end.
+Write decisions that answer *why*, not just *what*. Bad: "Used Redis". Good: "Chose Redis over in-memory cache — data must survive restarts, and the project already runs Redis for session storage". Record decisions as you go — don't wait until the end.
 
 ### 4. Record evidence
 
@@ -80,7 +81,7 @@ Make your done summary concrete — what changed and what's the evidence it work
 ## Important
 
 - **Declare approach early** — don't wait until you're done. The lead may check `agx exploration status` while you're still working.
-- **Record decisions as you go** — every significant choice (architecture, trade-offs, what you tried and rejected) should be a `agx record event --kind decision` call. These are preserved in the decision log when context is exported.
+- **Record decisions as you go** — every significant choice (architecture, trade-offs, what you tried and rejected) should be a `agx record event --kind decision` call. Include context and reasoning — these are embedded directly into merge commit messages and preserved in the decision log when context is exported.
 - **Record evidence** — tasks without evidence are hard to evaluate. Run the project's tests and record results.
 - **Commit before `agx exploration done`** — your branch must have commits for merge to work. Uncommitted changes are invisible to `agx exploration compare` and will be lost during `agx dispatch merge`. Always `git add` + `git commit` before `agx exploration done`.
 - **Write a clear done summary** — this is what the lead reads when evaluating tasks.
