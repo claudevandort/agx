@@ -39,7 +39,8 @@ fn printUsage(w: *std.Io.Writer) !void {
         \\Subcommands:
         \\  create --tasks "desc1" "desc2" ...   Create a batch with multiple tasks
         \\  status [--batch <id>]                Show batch and per-task status
-        \\  merge [--batch <id>] [--dry-run]     Merge all completed tasks sequentially
+        \\  merge [--batch <id>] [--dry-run]     Merge completed tasks sequentially
+        \\        [--continue]
         \\
         \\Create options:
         \\  --tasks "desc1" "desc2" ...   Task descriptions (required, consumes remaining args)
@@ -49,6 +50,7 @@ fn printUsage(w: *std.Io.Writer) !void {
         \\Merge options:
         \\  --dry-run                     Print merge order without merging
         \\  --batch <id>                  Batch ID prefix (default: most recent active)
+        \\  --continue                    Resume after resolving merge conflicts
         \\
     , .{});
 }
@@ -123,6 +125,7 @@ fn runCreate(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer,
         .status = .active,
         .merge_policy = merge_policy,
         .merge_order = null,
+        .merge_progress = 0,
         .created_at = now,
         .updated_at = now,
     });
@@ -286,11 +289,14 @@ fn runStatus(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer,
 
 fn runMerge(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !void {
     var dry_run = false;
+    var continue_merge = false;
 
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         if (std.mem.eql(u8, args[i], "--dry-run")) {
             dry_run = true;
+        } else if (std.mem.eql(u8, args[i], "--continue")) {
+            continue_merge = true;
         } else if (std.mem.eql(u8, args[i], "--batch")) {
             i += 1; // skip value (TODO: support --batch prefix lookup)
         }
@@ -309,6 +315,14 @@ fn runMerge(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, 
         std.process.exit(1);
     };
 
+    // If batch is in conflict state, require --continue
+    if (batch.status == .conflict and !continue_merge) {
+        try stderr.print("error: batch has unresolved merge conflicts\n", .{});
+        try stderr.print("Resolve the conflicts, then run: agx batch merge --continue\n", .{});
+        try stderr.flush();
+        std.process.exit(1);
+    }
+
     // Get tasks
     var task_buf: [64]agx.Task = undefined;
     const tasks = try ctx.store.getTasksByBatch(batch.id, &task_buf);
@@ -319,36 +333,14 @@ fn runMerge(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, 
         std.process.exit(1);
     }
 
-    // Verify all tasks have a done exploration
-    for (tasks, 0..) |t, idx| {
-        var exp_buf: [4]agx.Exploration = undefined;
-        const exps = try ctx.store.getExplorationsByTask(t.id, &exp_buf);
-        var has_done = false;
-        for (exps) |e| {
-            if (e.status == .done or e.status == .kept) {
-                has_done = true;
-                break;
-            }
-        }
-        if (!has_done) {
-            try stderr.print("error: task [{d}] '{s}' has no completed exploration\n", .{ idx + 1, t.description });
-            try stderr.flush();
-            std.process.exit(1);
-        }
-    }
-
     // Compute file overlap and merge order
     var file_sets = try aa.alloc(overlap.FileSet, tasks.len);
     for (tasks, 0..) |t, idx| {
-        // Get the branch for this task's exploration
         var exp_buf: [4]agx.Exploration = undefined;
         const exps = try ctx.store.getExplorationsByTask(t.id, &exp_buf);
         const branch = exps[0].branch_name;
-
-        // Get changed files
         const numstat = ctx.git.diffNumstat(batch.base_commit, branch) catch "";
         const files = try overlap.getChangedFiles(aa, numstat);
-
         file_sets[idx] = .{
             .task_index = idx,
             .files = files,
@@ -357,30 +349,105 @@ fn runMerge(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, 
 
     const merge_order = try overlap.computeMergeOrder(aa, file_sets);
 
-    // Build merge order JSON and store it
-    var order_json = std.ArrayList(u8).empty;
-    try order_json.append(aa, '[');
-    for (merge_order, 0..) |task_idx, oi| {
-        if (oi > 0) try order_json.append(aa, ',');
-        const task_enc = tasks[task_idx].id.encode();
-        try order_json.append(aa, '"');
-        try order_json.appendSlice(aa, &task_enc);
-        try order_json.append(aa, '"');
+    // Store merge order if not already stored
+    if (batch.merge_order == null) {
+        var order_json = std.ArrayList(u8).empty;
+        try order_json.append(aa, '[');
+        for (merge_order, 0..) |task_idx, oi| {
+            if (oi > 0) try order_json.append(aa, ',');
+            const task_enc = tasks[task_idx].id.encode();
+            try order_json.append(aa, '"');
+            try order_json.appendSlice(aa, &task_enc);
+            try order_json.append(aa, '"');
+        }
+        try order_json.append(aa, ']');
+        try ctx.store.updateBatchMergeOrder(batch.id, order_json.items);
     }
-    try order_json.append(aa, ']');
-    try ctx.store.updateBatchMergeOrder(batch.id, order_json.items);
+
+    // Determine starting step
+    var start_step: usize = batch.merge_progress;
+
+    // Handle --continue: commit the resolved conflict, then advance
+    if (continue_merge) {
+        if (batch.status != .conflict) {
+            try stderr.print("error: --continue used but batch is not in conflict state\n", .{});
+            try stderr.flush();
+            std.process.exit(1);
+        }
+
+        // Check if there are still unresolved conflicts
+        const unmerged = ctx.git.conflictedFiles() catch "";
+        if (unmerged.len > 0) {
+            try stderr.print("error: there are still unresolved conflicts:\n{s}\n", .{unmerged});
+            try stderr.print("Resolve all conflicts, stage with 'git add', then run: agx batch merge --continue\n", .{});
+            try stderr.flush();
+            std.process.exit(1);
+        }
+
+        // Commit the resolved merge
+        const conflict_task_idx = merge_order[start_step];
+        const conflict_task = tasks[conflict_task_idx];
+        const batch_enc = batch.id.encode();
+        const task_enc = conflict_task.id.encode();
+        const commit_msg = try std.fmt.allocPrint(aa, "agx batch merge: {s}\n\nAGX-Batch: {s}\nAGX-Task: {s}", .{
+            conflict_task.description,
+            &batch_enc,
+            &task_enc,
+        });
+        ctx.git.mergeCommit(commit_msg) catch {
+            try stderr.print("error: could not commit resolved merge for task [{d}]\n", .{conflict_task_idx + 1});
+            try stderr.print("Stage your resolved files with 'git add' first.\n", .{});
+            try stderr.flush();
+            std.process.exit(1);
+        };
+
+        start_step += 1;
+        try ctx.store.updateBatchMergeProgress(batch.id, @intCast(start_step));
+        try ctx.store.updateBatchStatus(batch.id, .merging);
+        try stdout.print("Conflict resolved — committed step {d}/{d}.\n", .{ start_step, merge_order.len });
+
+        if (start_step >= merge_order.len) {
+            try ctx.store.updateBatchStatus(batch.id, .completed);
+            try stdout.print("\nAll {d} tasks merged successfully. Batch completed.\n", .{merge_order.len});
+            return;
+        }
+    } else {
+        // Verify all tasks have a done exploration (only on fresh merge, not --continue)
+        for (tasks, 0..) |t, idx| {
+            var exp_buf: [4]agx.Exploration = undefined;
+            const exps = try ctx.store.getExplorationsByTask(t.id, &exp_buf);
+            var has_done = false;
+            for (exps) |e| {
+                if (e.status == .done or e.status == .kept) {
+                    has_done = true;
+                    break;
+                }
+            }
+            if (!has_done) {
+                try stderr.print("error: task [{d}] '{s}' has no completed exploration\n", .{ idx + 1, t.description });
+                try stderr.flush();
+                std.process.exit(1);
+            }
+        }
+    }
 
     // Print merge plan
-    try stdout.print("Merge order ({d} tasks):\n", .{merge_order.len});
+    try stdout.print("\nMerge order ({d} tasks):\n", .{merge_order.len});
     for (merge_order, 0..) |task_idx, step| {
         const t = tasks[task_idx];
         const fs = file_sets[task_idx];
-        try stdout.print("  {d}. [{d}] {s} ({d} files changed)\n", .{
+        const status_marker: []const u8 = if (step < start_step) " [done]" else "";
+        try stdout.print("  {d}. [{d}] {s} ({d} files changed){s}\n", .{
             step + 1,
             task_idx + 1,
             t.description,
             fs.files.len,
+            status_marker,
         });
+    }
+
+    if (start_step > 0 and !continue_merge) {
+        try stdout.print("\nResuming from step {d} ({d} already merged).\n", .{ start_step + 1, start_step });
     }
 
     // Show overlap matrix
@@ -412,20 +479,21 @@ fn runMerge(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, 
         return;
     }
 
-    // Execute sequential merge
+    // Execute sequential merge starting from progress point
     try ctx.store.updateBatchStatus(batch.id, .merging);
 
-    // Checkout base branch
-    ctx.git.checkout(batch.base_branch) catch {
-        try stderr.print("error: could not checkout base branch '{s}'\n", .{batch.base_branch});
-        try stderr.flush();
-        std.process.exit(1);
-    };
+    // Checkout base branch (only if starting fresh — if continuing, we're already on it)
+    if (!continue_merge) {
+        ctx.git.checkout(batch.base_branch) catch {
+            try stderr.print("error: could not checkout base branch '{s}'\n", .{batch.base_branch});
+            try stderr.flush();
+            std.process.exit(1);
+        };
+    }
 
     try stdout.print("\nMerging into {s}...\n", .{batch.base_branch});
 
-    var all_clean = true;
-    for (merge_order, 0..) |task_idx, step| {
+    for (merge_order[start_step..], start_step..) |task_idx, step| {
         const t = tasks[task_idx];
         var exp_buf2: [4]agx.Exploration = undefined;
         const exps = try ctx.store.getExplorationsByTask(t.id, &exp_buf2);
@@ -435,13 +503,13 @@ fn runMerge(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, 
 
         const merge_result = ctx.git.mergeNoCommit(branch) catch {
             try stderr.print("error: merge failed for branch '{s}'\n", .{branch});
-            all_clean = false;
-            break;
+            try ctx.store.updateBatchStatus(batch.id, .failed);
+            try stdout.print("\nBatch merge failed (git error). Fix and retry with: agx batch merge\n", .{});
+            return;
         };
 
         switch (merge_result) {
             .clean => {
-                // Commit with trailers
                 const batch_enc = batch.id.encode();
                 const task_enc = t.id.encode();
                 const commit_msg = try std.fmt.allocPrint(aa, "agx batch merge: {s}\n\nAGX-Batch: {s}\nAGX-Task: {s}", .{
@@ -451,43 +519,27 @@ fn runMerge(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, 
                 });
                 ctx.git.mergeCommit(commit_msg) catch {
                     try stderr.print("error: could not commit merge for task [{d}]\n", .{task_idx + 1});
-                    all_clean = false;
-                    break;
+                    try ctx.store.updateBatchStatus(batch.id, .failed);
+                    return;
                 };
-                try stdout.print("    Clean merge — committed.\n", .{});
+                const progress: u32 = @intCast(step + 1);
+                try ctx.store.updateBatchMergeProgress(batch.id, progress);
+                try stdout.print("    Clean merge — committed. ({d}/{d})\n", .{ progress, merge_order.len });
             },
             .conflict => {
                 const conflicted = ctx.git.conflictedFiles() catch "unknown";
                 try stdout.print("    CONFLICT in: {s}\n", .{conflicted});
+                try stdout.print("    Resolve conflicts, stage with 'git add', then run:\n", .{});
+                try stdout.print("      agx batch merge --continue\n", .{});
 
-                // Behavior depends on merge policy
-                switch (batch.merge_policy) {
-                    .autonomous => {
-                        try stdout.print("    Policy: autonomous — agent should resolve conflicts.\n", .{});
-                        try stdout.print("    Aborting merge. Resolve conflicts and run 'git commit' to continue.\n", .{});
-                    },
-                    .semi => {
-                        try stdout.print("    Policy: semi — review conflicts and resolve.\n", .{});
-                        try stdout.print("    Aborting merge. Resolve conflicts and run 'git commit' to continue.\n", .{});
-                    },
-                    .manual => {
-                        try stdout.print("    Policy: manual — user must resolve all conflicts.\n", .{});
-                        try stdout.print("    Aborting merge. Resolve conflicts and run 'git commit' to continue.\n", .{});
-                    },
-                }
-                all_clean = false;
-                // Don't abort — leave the conflict state for the user/agent to resolve
-                break;
+                // Set status to conflict — batch stays findable
+                try ctx.store.updateBatchStatus(batch.id, .conflict);
+                try stdout.print("\nBatch merge paused at step {d}/{d}.\n", .{ step + 1, merge_order.len });
+                return;
             },
         }
     }
 
-    if (all_clean) {
-        try ctx.store.updateBatchStatus(batch.id, .completed);
-        try stdout.print("\nAll {d} tasks merged successfully. Batch completed.\n", .{merge_order.len});
-    } else {
-        try ctx.store.updateBatchStatus(batch.id, .failed);
-        try stdout.print("\nBatch merge stopped due to conflicts. Resolve and retry.\n", .{});
-    }
-
+    try ctx.store.updateBatchStatus(batch.id, .completed);
+    try stdout.print("\nAll {d} tasks merged successfully. Batch completed.\n", .{merge_order.len});
 }

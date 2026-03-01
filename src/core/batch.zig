@@ -4,6 +4,7 @@ const Ulid = @import("ulid.zig").Ulid;
 pub const BatchStatus = enum {
     active,
     merging,
+    conflict,
     completed,
     failed,
     abandoned,
@@ -45,6 +46,7 @@ pub const Batch = struct {
     status: BatchStatus,
     merge_policy: MergePolicy,
     merge_order: ?[]const u8, // JSON array of task ULID strings, set at merge time
+    merge_progress: u32, // number of tasks successfully merged so far
     created_at: i64,
     updated_at: i64,
 };

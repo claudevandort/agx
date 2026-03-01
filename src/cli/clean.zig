@@ -50,7 +50,7 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
     for (all_batches) |batch| {
         switch (batch.status) {
             .completed, .failed, .abandoned => {},
-            .active, .merging => continue,
+            .active, .merging, .conflict => continue,
         }
 
         const batch_short = batch.id.short(6);

@@ -729,7 +729,7 @@ pub const Store = struct {
 
     pub fn insertBatch(self: *Store, batch: Batch) StoreError!void {
         var stmt = try self.db.prepare(
-            "INSERT INTO batches (id, description, base_commit, base_branch, status, merge_policy, merge_order, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "INSERT INTO batches (id, description, base_commit, base_branch, status, merge_policy, merge_order, merge_progress, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         );
         defer stmt.finalize();
         try stmt.bindBlob(1, &batch.id.bytes);
@@ -739,14 +739,15 @@ pub const Store = struct {
         try stmt.bindText(5, batch.status.toStr());
         try stmt.bindText(6, batch.merge_policy.toStr());
         try stmt.bindOptionalText(7, batch.merge_order);
-        try stmt.bindInt64(8, batch.created_at);
-        try stmt.bindInt64(9, batch.updated_at);
+        try stmt.bindInt64(8, @intCast(batch.merge_progress));
+        try stmt.bindInt64(9, batch.created_at);
+        try stmt.bindInt64(10, batch.updated_at);
         _ = try stmt.step();
     }
 
     pub fn getBatch(self: *Store, id: Ulid) StoreError!Batch {
         var stmt = try self.db.prepare(
-            "SELECT id, description, base_commit, base_branch, status, merge_policy, merge_order, created_at, updated_at FROM batches WHERE id = ?1",
+            "SELECT id, description, base_commit, base_branch, status, merge_policy, merge_order, merge_progress, created_at, updated_at FROM batches WHERE id = ?1",
         );
         defer stmt.finalize();
         try stmt.bindBlob(1, &id.bytes);
@@ -757,7 +758,7 @@ pub const Store = struct {
 
     pub fn getActiveBatch(self: *Store) StoreError!Batch {
         var stmt = try self.db.prepare(
-            "SELECT id, description, base_commit, base_branch, status, merge_policy, merge_order, created_at, updated_at FROM batches WHERE status = 'active' OR status = 'merging' ORDER BY created_at DESC LIMIT 1",
+            "SELECT id, description, base_commit, base_branch, status, merge_policy, merge_order, merge_progress, created_at, updated_at FROM batches WHERE status IN ('active', 'merging', 'conflict') ORDER BY created_at DESC LIMIT 1",
         );
         defer stmt.finalize();
         const result = try stmt.step();
@@ -776,6 +777,17 @@ pub const Store = struct {
         _ = try stmt.step();
     }
 
+    pub fn updateBatchMergeProgress(self: *Store, id: Ulid, progress: u32) StoreError!void {
+        var stmt = try self.db.prepare(
+            "UPDATE batches SET merge_progress = ?1, updated_at = ?2 WHERE id = ?3",
+        );
+        defer stmt.finalize();
+        try stmt.bindInt64(1, @intCast(progress));
+        try stmt.bindInt64(2, std.time.milliTimestamp());
+        try stmt.bindBlob(3, &id.bytes);
+        _ = try stmt.step();
+    }
+
     pub fn updateBatchMergeOrder(self: *Store, id: Ulid, merge_order: []const u8) StoreError!void {
         var stmt = try self.db.prepare(
             "UPDATE batches SET merge_order = ?1, updated_at = ?2 WHERE id = ?3",
@@ -789,7 +801,7 @@ pub const Store = struct {
 
     pub fn getAllBatches(self: *Store, buf: []Batch) StoreError![]Batch {
         var stmt = try self.db.prepare(
-            "SELECT id, description, base_commit, base_branch, status, merge_policy, merge_order, created_at, updated_at FROM batches ORDER BY created_at DESC",
+            "SELECT id, description, base_commit, base_branch, status, merge_policy, merge_order, merge_progress, created_at, updated_at FROM batches ORDER BY created_at DESC",
         );
         defer stmt.finalize();
 
@@ -883,8 +895,9 @@ pub const Store = struct {
             .status = BatchStatus.fromStr(stmt.columnText(4) orelse "active") catch .active,
             .merge_policy = MergePolicy.fromStr(stmt.columnText(5) orelse "semi") catch .semi,
             .merge_order = try self.dupeOptionalText(stmt.columnText(6)),
-            .created_at = stmt.columnInt64(7),
-            .updated_at = stmt.columnInt64(8),
+            .merge_progress = @intCast(stmt.columnInt64(7)),
+            .created_at = stmt.columnInt64(8),
+            .updated_at = stmt.columnInt64(9),
         };
     }
 
@@ -1137,6 +1150,7 @@ test "batch and getTasksByBatch" {
         .status = .active,
         .merge_policy = .semi,
         .merge_order = null,
+        .merge_progress = 0,
         .created_at = now,
         .updated_at = now,
     });

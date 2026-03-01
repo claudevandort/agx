@@ -115,4 +115,8 @@ pub const migrations = [_][]const u8{
     \\CREATE INDEX IF NOT EXISTS idx_tasks_batch ON tasks(batch_id);
     \\
     ,
+    // Migration 5: merge progress tracking for resumable batch merges
+    \\ALTER TABLE batches ADD COLUMN merge_progress INTEGER NOT NULL DEFAULT 0;
+    \\
+    ,
 };
