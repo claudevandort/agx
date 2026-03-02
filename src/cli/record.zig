@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const agx = @import("agx");
 const session_util = @import("session_util.zig");
+const CliContext = @import("cli_common.zig").CliContext;
 
 pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, stderr: *std.Io.Writer) !void {
     // Parse: agx record <subcommand> [options]
@@ -62,28 +63,57 @@ fn recordEvent(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Write
     defer arena.deinit();
     const aa = arena.allocator();
 
-    const ctx = session_util.getWorktreeContext(aa, stderr) catch {
-        std.process.exit(1);
-        unreachable;
-    };
-
-    var store = try agx.Store.init(aa, ctx.db_path);
-    defer store.deinit();
-
-    const sess_id = agx.Ulid.decode(ctx.info.session_id_str) catch {
-        try stderr.print("error: invalid session ID in .agx-session\n", .{});
-        try stderr.flush();
-        std.process.exit(1);
-    };
-
     const now = std.time.milliTimestamp();
-    try store.insertEvent(.{
-        .id = agx.Ulid.new(),
-        .session_id = sess_id,
-        .kind = kind,
-        .data = data,
-        .created_at = now,
-    });
+
+    // Try worktree context first (task-level event), fall back to goal-level
+    if (session_util.findSessionFile(aa)) |info| {
+        const git = agx.GitCli.init(aa, null);
+        const common_dir = git.gitCommonDir() catch {
+            try stderr.print("error: could not determine git common dir\n", .{});
+            try stderr.flush();
+            std.process.exit(1);
+        };
+        const db_path = try std.fmt.allocPrintSentinel(aa, "{s}/agx/db.sqlite3", .{common_dir}, 0);
+
+        var store = try agx.Store.init(aa, db_path);
+        defer store.deinit();
+
+        const sess_id = agx.Ulid.decode(info.session_id_str) catch {
+            try stderr.print("error: invalid session ID in .agx-session\n", .{});
+            try stderr.flush();
+            std.process.exit(1);
+        };
+
+        try store.insertEvent(.{
+            .id = agx.Ulid.new(),
+            .session_id = sess_id,
+            .goal_id = null,
+            .kind = kind,
+            .data = data,
+            .created_at = now,
+        });
+    } else |_| {
+        // Not in a worktree — record as goal-level event
+        var ctx = CliContext.open(aa, stderr);
+        defer ctx.deinit();
+
+        const g = ctx.store.getActiveGoal() catch {
+            try stderr.print("error: no active goal found\n", .{});
+            try stderr.print("hint: run from a task worktree, or ensure an active goal exists\n", .{});
+            try stderr.flush();
+            std.process.exit(1);
+            unreachable;
+        };
+
+        try ctx.store.insertEvent(.{
+            .id = agx.Ulid.new(),
+            .session_id = null,
+            .goal_id = g.id,
+            .kind = kind,
+            .data = data,
+            .created_at = now,
+        });
+    }
 
     try stdout.print("Recorded {s} event\n", .{kind_str.?});
     try stdout.flush();

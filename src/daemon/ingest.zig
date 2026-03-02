@@ -75,6 +75,7 @@ pub fn ingestContent(
         store.insertEvent(.{
             .id = Ulid.new(),
             .session_id = session_id,
+            .goal_id = null,
             .kind = kind,
             .data = raw.data,
             .created_at = raw.timestamp orelse now,

@@ -27,19 +27,6 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         }
     }
 
-    if (index_str == null) {
-        try stderr.print("error: task index required\n", .{});
-        try stderr.print("usage: agx exploration log <index> [--kind <type>] [--limit N] [--json]\n", .{});
-        try stderr.flush();
-        std.process.exit(1);
-    }
-
-    const index = std.fmt.parseInt(u32, index_str.?, 10) catch {
-        try stderr.print("error: invalid task index '{s}'\n", .{index_str.?});
-        try stderr.flush();
-        std.process.exit(1);
-    };
-
     var arena = std.heap.ArenaAllocator.init(alloc);
     defer arena.deinit();
     const aa = arena.allocator();
@@ -53,6 +40,28 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         try stderr.flush();
         std.process.exit(1);
         unreachable;
+    };
+
+    // Validate kind filter if provided
+    if (kind_filter) |kf| {
+        _ = agx.event.EventKind.fromStr(kf) catch {
+            try stderr.print("error: unknown event kind '{s}'\n", .{kf});
+            try stderr.print("valid: message, tool_call, tool_result, decision, file_change, git_commit, error, custom\n", .{});
+            try stderr.flush();
+            std.process.exit(1);
+        };
+    }
+
+    // No index provided — show goal-level events
+    if (index_str == null) {
+        try showGoalEvents(&ctx.store, g.id, kind_filter, limit, format_json, stdout);
+        return;
+    }
+
+    const index = std.fmt.parseInt(u32, index_str.?, 10) catch {
+        try stderr.print("error: invalid task index '{s}'\n", .{index_str.?});
+        try stderr.flush();
+        std.process.exit(1);
     };
 
     // Find task by index
@@ -73,16 +82,6 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         return;
     }
 
-    // Validate kind filter if provided
-    if (kind_filter) |kf| {
-        _ = agx.event.EventKind.fromStr(kf) catch {
-            try stderr.print("error: unknown event kind '{s}'\n", .{kf});
-            try stderr.print("valid: message, tool_call, tool_result, decision, file_change, git_commit, error, custom\n", .{});
-            try stderr.flush();
-            std.process.exit(1);
-        };
-    }
-
     if (format_json) {
         try stdout.print("[", .{});
     }
@@ -100,22 +99,8 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
             if (format_json) {
                 if (!first_json) try stdout.print(",", .{});
                 first_json = false;
-                var jw = JsonWriter.init(stdout);
-                try jw.beginObject();
-                try jw.stringField("kind", ev.kind.toStr());
-                try jw.intField("created_at", ev.created_at);
-                if (ev.data) |d| {
-                    // data is expected to be a raw JSON value, but validate
-                    // it starts with { or [ or " — otherwise escape as string
-                    if (d.len > 0 and (d[0] == '{' or d[0] == '[' or d[0] == '"')) {
-                        try jw.rawField("data", d);
-                    } else {
-                        try jw.stringField("data", d);
-                    }
-                }
-                try jw.endObject();
+                try writeEventJson(stdout, &ev);
             } else {
-                // Human-readable format
                 try printEvent(stdout, &ev);
             }
             total_events += 1;
@@ -138,6 +123,53 @@ pub fn run(alloc: Allocator, args: []const []const u8, stdout: *std.Io.Writer, s
         try stdout.print("\n", .{});
     }
     try stdout.flush();
+}
+
+fn showGoalEvents(store: *agx.Store, goal_id: agx.Ulid, kind_filter: ?[]const u8, limit: u32, format_json: bool, stdout: *std.Io.Writer) !void {
+    var ev_buf: [1024]agx.Event = undefined;
+    const buf_limit = @min(limit, ev_buf.len);
+
+    const events = try store.getEventsByGoal(goal_id, kind_filter, ev_buf[0..buf_limit]);
+
+    if (format_json) {
+        try stdout.print("[", .{});
+        for (events, 0..) |ev, idx| {
+            if (idx > 0) try stdout.print(",", .{});
+            try writeEventJson(stdout, &ev);
+        }
+        try stdout.print("]\n", .{});
+    } else if (events.len == 0) {
+        try stdout.print("No goal-level events recorded", .{});
+        if (kind_filter) |kf| {
+            try stdout.print(" (filter: {s})", .{kf});
+        }
+        try stdout.print("\n", .{});
+    } else {
+        for (events) |ev| {
+            try printEvent(stdout, &ev);
+        }
+        try stdout.print("\n{d} goal-level event(s) shown", .{events.len});
+        if (kind_filter) |kf| {
+            try stdout.print(" (filter: {s})", .{kf});
+        }
+        try stdout.print("\n", .{});
+    }
+    try stdout.flush();
+}
+
+fn writeEventJson(w: *std.Io.Writer, ev: *const agx.Event) !void {
+    var jw = JsonWriter.init(w);
+    try jw.beginObject();
+    try jw.stringField("kind", ev.kind.toStr());
+    try jw.intField("created_at", ev.created_at);
+    if (ev.data) |d| {
+        if (d.len > 0 and (d[0] == '{' or d[0] == '[' or d[0] == '"')) {
+            try jw.rawField("data", d);
+        } else {
+            try jw.stringField("data", d);
+        }
+    }
+    try jw.endObject();
 }
 
 fn printEvent(w: *std.Io.Writer, ev: *const agx.Event) !void {

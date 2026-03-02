@@ -25,9 +25,9 @@ pub const EventKind = enum {
 
 pub const Event = struct {
     id: Ulid,
-    session_id: Ulid,
+    session_id: ?Ulid,
+    goal_id: ?Ulid,
     kind: EventKind,
     data: ?[]const u8, // JSON blob
     created_at: i64,
-
 };

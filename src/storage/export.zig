@@ -28,9 +28,9 @@ pub fn exportGoalContext(
     const tasks = try store.getTasksByGoal(g.id, &task_buf);
 
     try writeSummary(alloc, g, tasks, context_dir);
-    try writeSessionsJsonl(alloc, store, tasks, context_dir);
+    try writeSessionsJsonl(alloc, store, g, tasks, context_dir);
     try writeEvidenceJson(alloc, store, tasks, context_dir);
-    try writeDecisionLog(alloc, store, tasks, context_dir);
+    try writeDecisionLog(alloc, store, g, tasks, context_dir);
 
     return context_dir;
 }
@@ -50,9 +50,9 @@ pub fn exportTaskContext(
 
     const tasks = &[_]Task{t.*};
     try writeSummary(alloc, g, tasks, context_dir);
-    try writeSessionsJsonl(alloc, store, tasks, context_dir);
+    try writeSessionsJsonl(alloc, store, g, tasks, context_dir);
     try writeEvidenceJson(alloc, store, tasks, context_dir);
-    try writeDecisionLog(alloc, store, tasks, context_dir);
+    try writeDecisionLog(alloc, store, g, tasks, context_dir);
 
     return context_dir;
 }
@@ -120,6 +120,7 @@ fn writeSummary(
 fn writeSessionsJsonl(
     alloc: Allocator,
     store: *Store,
+    g: *const Goal,
     tasks: []const Task,
     context_dir: []const u8,
 ) !void {
@@ -131,6 +132,21 @@ fn writeSessionsJsonl(
     var buf: [4096]u8 = undefined;
     var fw = file.writer(&buf);
     const w = &fw.interface;
+
+    // Write goal-level events first
+    var goal_ev_buf: [256]Event = undefined;
+    const goal_events = store.getEventsByGoal(g.id, null, &goal_ev_buf) catch &[_]Event{};
+    for (goal_events) |ev| {
+        var ejw = JsonWriter.init(w);
+        try ejw.beginObject();
+        try ejw.stringField("type", "goal_event");
+        try ejw.stringField("kind", ev.kind.toStr());
+        try ejw.intField("created_at", ev.created_at);
+        if (ev.data) |d| try ejw.rawField("data", d);
+        try ejw.endObject();
+        try w.print("\n", .{});
+    }
+    if (goal_events.len > 0) try w.flush();
 
     for (tasks) |t| {
         var sess_buf: [8]Session = undefined;
@@ -218,6 +234,7 @@ fn writeEvidenceJson(
 fn writeDecisionLog(
     alloc: Allocator,
     store: *Store,
+    g: *const Goal,
     tasks: []const Task,
     context_dir: []const u8,
 ) !void {
@@ -233,6 +250,20 @@ fn writeDecisionLog(
     try w.print("# Decision Log\n\n", .{});
 
     var has_decisions = false;
+
+    // Goal-level decisions
+    var goal_ev_buf: [256]Event = undefined;
+    const goal_decisions = store.getEventsByGoal(g.id, "decision", &goal_ev_buf) catch &[_]Event{};
+    if (goal_decisions.len > 0) {
+        try w.print("## Goal-level\n\n", .{});
+        has_decisions = true;
+        for (goal_decisions) |ev| {
+            if (ev.data) |d| {
+                try w.print("- {s}\n", .{d});
+            }
+        }
+        try w.print("\n", .{});
+    }
 
     for (tasks) |t| {
         var sess_buf: [8]Session = undefined;

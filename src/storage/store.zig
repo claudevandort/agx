@@ -71,10 +71,12 @@ pub const Store = struct {
             "CREATE TABLE IF NOT EXISTS agx_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL)",
         ) catch return error.MigrationFailed;
 
-        var stmt = try self.db.prepare("SELECT COALESCE(MAX(version), -1) FROM agx_migrations");
-        defer stmt.finalize();
-        const row = try stmt.step();
-        const current_version: i64 = if (row == .row) stmt.columnInt64(0) else -1;
+        const current_version: i64 = blk: {
+            var stmt = try self.db.prepare("SELECT COALESCE(MAX(version), -1) FROM agx_migrations");
+            defer stmt.finalize();
+            const row = try stmt.step();
+            break :blk if (row == .row) stmt.columnInt64(0) else -1;
+        };
 
         for (migrations, 0..) |sql, i| {
             const ver: i64 = @intCast(i);
@@ -109,6 +111,12 @@ pub const Store = struct {
     fn readUlid(stmt: *sqlite.Stmt, col: u32) Ulid {
         const blob = stmt.columnBlob(col) orelse return Ulid{ .bytes = [_]u8{0} ** 16 };
         if (blob.len < 16) return Ulid{ .bytes = [_]u8{0} ** 16 };
+        return Ulid{ .bytes = blob[0..16].* };
+    }
+
+    fn readOptionalUlid(stmt: *sqlite.Stmt, col: u32) ?Ulid {
+        const blob = stmt.columnBlob(col) orelse return null;
+        if (blob.len < 16) return null;
         return Ulid{ .bytes = blob[0..16].* };
     }
 
@@ -367,13 +375,22 @@ pub const Store = struct {
     pub fn insertEvent(self: *Store, event: Event) StoreError!void {
         const stmt = try self.getCached(
             &self.cached_insert_event,
-            "INSERT INTO events (id, session_id, kind, data, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT INTO events (id, session_id, goal_id, kind, data, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         );
         try stmt.bindBlob(1, &event.id.bytes);
-        try stmt.bindBlob(2, &event.session_id.bytes);
-        try stmt.bindText(3, event.kind.toStr());
-        try stmt.bindOptionalText(4, event.data);
-        try stmt.bindInt64(5, event.created_at);
+        if (event.session_id) |sid| {
+            try stmt.bindBlob(2, &sid.bytes);
+        } else {
+            try stmt.bindNull(2);
+        }
+        if (event.goal_id) |gid| {
+            try stmt.bindBlob(3, &gid.bytes);
+        } else {
+            try stmt.bindNull(3);
+        }
+        try stmt.bindText(4, event.kind.toStr());
+        try stmt.bindOptionalText(5, event.data);
+        try stmt.bindInt64(6, event.created_at);
         _ = try stmt.step();
     }
 
@@ -392,12 +409,12 @@ pub const Store = struct {
 
         const stmt: *sqlite.Stmt = if (kind_filter) |_| blk: {
             uncached_stmt = try self.db.prepare(
-                "SELECT id, session_id, kind, data, created_at FROM events WHERE session_id = ?1 AND kind = ?2 ORDER BY created_at LIMIT ?3",
+                "SELECT id, session_id, goal_id, kind, data, created_at FROM events WHERE session_id = ?1 AND kind = ?2 ORDER BY created_at LIMIT ?3",
             );
             break :blk &uncached_stmt.?;
         } else try self.getCached(
             &self.cached_events_by_session,
-            "SELECT id, session_id, kind, data, created_at FROM events WHERE session_id = ?1 ORDER BY created_at LIMIT ?2",
+            "SELECT id, session_id, goal_id, kind, data, created_at FROM events WHERE session_id = ?1 ORDER BY created_at LIMIT ?2",
         );
 
         try stmt.bindBlob(1, &session_id.bytes);
@@ -414,10 +431,11 @@ pub const Store = struct {
             if (result != .row) break;
             buf[count] = .{
                 .id = readUlid(stmt, 0),
-                .session_id = readUlid(stmt, 1),
-                .kind = EventKind.fromStr(stmt.columnText(2) orelse "custom") catch .custom,
-                .data = try self.dupeOptionalText(stmt.columnText(3)),
-                .created_at = stmt.columnInt64(4),
+                .session_id = readOptionalUlid(stmt, 1),
+                .goal_id = readOptionalUlid(stmt, 2),
+                .kind = EventKind.fromStr(stmt.columnText(3) orelse "custom") catch .custom,
+                .data = try self.dupeOptionalText(stmt.columnText(4)),
+                .created_at = stmt.columnInt64(5),
             };
             count += 1;
         }
@@ -433,6 +451,48 @@ pub const Store = struct {
         try stmt.bindBlob(1, &task_id.bytes);
         _ = try stmt.step();
         return stmt.columnInt64(0);
+    }
+
+    pub fn getEventsByGoal(self: *Store, goal_id: Ulid, kind_filter: ?[]const u8, buf: []Event) StoreError![]Event {
+        var uncached_stmt: ?sqlite.Stmt = null;
+        defer if (uncached_stmt) |*s| s.finalize();
+
+        const stmt: *sqlite.Stmt = if (kind_filter) |_| blk: {
+            uncached_stmt = try self.db.prepare(
+                "SELECT id, session_id, goal_id, kind, data, created_at FROM events WHERE goal_id = ?1 AND kind = ?2 ORDER BY created_at LIMIT ?3",
+            );
+            break :blk &uncached_stmt.?;
+        } else blk: {
+            uncached_stmt = try self.db.prepare(
+                "SELECT id, session_id, goal_id, kind, data, created_at FROM events WHERE goal_id = ?1 ORDER BY created_at LIMIT ?2",
+            );
+            break :blk &uncached_stmt.?;
+        };
+
+        try stmt.bindBlob(1, &goal_id.bytes);
+        if (kind_filter) |kf| {
+            try stmt.bindText(2, kf);
+            try stmt.bindInt(3, @intCast(buf.len));
+        } else {
+            try stmt.bindInt(2, @intCast(buf.len));
+        }
+
+        var count: usize = 0;
+        while (count < buf.len) {
+            const result = try stmt.step();
+            if (result != .row) break;
+            buf[count] = .{
+                .id = readUlid(stmt, 0),
+                .session_id = readOptionalUlid(stmt, 1),
+                .goal_id = readOptionalUlid(stmt, 2),
+                .kind = EventKind.fromStr(stmt.columnText(3) orelse "custom") catch .custom,
+                .data = try self.dupeOptionalText(stmt.columnText(4)),
+                .created_at = stmt.columnInt64(5),
+            };
+            count += 1;
+        }
+
+        return buf[0..count];
     }
 
     // ── Evidence CRUD ──

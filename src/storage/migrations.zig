@@ -7,6 +7,19 @@ pub const migrations = [_][]const u8{
     \\    applied_at INTEGER NOT NULL
     \\);
     \\
+    \\CREATE TABLE IF NOT EXISTS dispatches (
+    \\    id BLOB PRIMARY KEY,
+    \\    description TEXT NOT NULL,
+    \\    base_commit TEXT NOT NULL,
+    \\    base_branch TEXT NOT NULL,
+    \\    status TEXT NOT NULL DEFAULT 'active',
+    \\    merge_policy TEXT NOT NULL DEFAULT 'semi',
+    \\    merge_order TEXT,
+    \\    merge_progress INTEGER NOT NULL DEFAULT 0,
+    \\    created_at INTEGER NOT NULL,
+    \\    updated_at INTEGER NOT NULL
+    \\);
+    \\
     \\CREATE TABLE IF NOT EXISTS goals (
     \\    id BLOB PRIMARY KEY,          -- 16-byte ULID
     \\    description TEXT NOT NULL,
@@ -14,6 +27,7 @@ pub const migrations = [_][]const u8{
     \\    base_branch TEXT NOT NULL,
     \\    status TEXT NOT NULL DEFAULT 'active',
     \\    resolved_task_id BLOB,
+    \\    dispatch_id BLOB REFERENCES dispatches(id),
     \\    created_at INTEGER NOT NULL,
     \\    updated_at INTEGER NOT NULL
     \\);
@@ -45,7 +59,8 @@ pub const migrations = [_][]const u8{
     \\
     \\CREATE TABLE IF NOT EXISTS events (
     \\    id BLOB PRIMARY KEY,
-    \\    session_id BLOB NOT NULL REFERENCES sessions(id),
+    \\    session_id BLOB REFERENCES sessions(id),
+    \\    goal_id BLOB REFERENCES goals(id),
     \\    kind TEXT NOT NULL,
     \\    data TEXT,
     \\    created_at INTEGER NOT NULL
@@ -70,24 +85,12 @@ pub const migrations = [_][]const u8{
     \\    created_at INTEGER NOT NULL
     \\);
     \\
-    \\CREATE INDEX IF NOT EXISTS idx_tasks_goal ON tasks(goal_id);
-    \\CREATE INDEX IF NOT EXISTS idx_sessions_task ON sessions(task_id);
-    \\CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
-    \\CREATE INDEX IF NOT EXISTS idx_evidence_task ON evidence(task_id);
-    \\CREATE INDEX IF NOT EXISTS idx_snapshots_session ON snapshots(session_id);
-    ,
-    // Migration 1: ingest offset tracking
     \\CREATE TABLE IF NOT EXISTS ingest_offsets (
     \\    file_name TEXT PRIMARY KEY,
     \\    byte_offset INTEGER NOT NULL,
     \\    updated_at INTEGER NOT NULL
     \\);
-    ,
-    // Migration 2: schema constraints
-    \\CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_goal_idx ON tasks(goal_id, idx);
     \\
-    ,
-    // Migration 3: FTS5 full-text search index
     \\CREATE VIRTUAL TABLE IF NOT EXISTS context_fts USING fts5(
     \\    entity_type,
     \\    entity_id UNINDEXED,
@@ -97,26 +100,13 @@ pub const migrations = [_][]const u8{
     \\    tokenize='porter unicode61'
     \\);
     \\
-    ,
-    // Migration 4: Dispatch entity + dispatch_id on goals
-    \\CREATE TABLE IF NOT EXISTS dispatches (
-    \\    id BLOB PRIMARY KEY,
-    \\    description TEXT NOT NULL,
-    \\    base_commit TEXT NOT NULL,
-    \\    base_branch TEXT NOT NULL,
-    \\    status TEXT NOT NULL DEFAULT 'active',
-    \\    merge_policy TEXT NOT NULL DEFAULT 'semi',
-    \\    merge_order TEXT,
-    \\    created_at INTEGER NOT NULL,
-    \\    updated_at INTEGER NOT NULL
-    \\);
-    \\
-    \\ALTER TABLE goals ADD COLUMN dispatch_id BLOB REFERENCES dispatches(id);
+    \\CREATE INDEX IF NOT EXISTS idx_tasks_goal ON tasks(goal_id);
+    \\CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_goal_idx ON tasks(goal_id, idx);
+    \\CREATE INDEX IF NOT EXISTS idx_sessions_task ON sessions(task_id);
+    \\CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);
+    \\CREATE INDEX IF NOT EXISTS idx_events_goal ON events(goal_id);
+    \\CREATE INDEX IF NOT EXISTS idx_evidence_task ON evidence(task_id);
+    \\CREATE INDEX IF NOT EXISTS idx_snapshots_session ON snapshots(session_id);
     \\CREATE INDEX IF NOT EXISTS idx_goals_dispatch ON goals(dispatch_id);
-    \\
-    ,
-    // Migration 5: merge progress tracking for resumable dispatch merges
-    \\ALTER TABLE dispatches ADD COLUMN merge_progress INTEGER NOT NULL DEFAULT 0;
-    \\
     ,
 };
